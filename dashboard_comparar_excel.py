@@ -43,11 +43,22 @@ archivos = st.sidebar.file_uploader(
 # FUNCIONES AUXILIARES
 # ======================================================
 @st.cache_data
-def leer_excel(archivo):
+def obtener_hojas(archivo):
+    """Devuelve la lista de hojas de un archivo Excel."""
     try:
-        return pd.read_excel(archivo)
+        xls = pd.ExcelFile(archivo)
+        return xls.sheet_names
     except Exception as e:
-        st.error(f"Error al leer {archivo.name}: {e}")
+        st.error(f"No se pudieron leer las hojas de {archivo.name}: {e}")
+        return []
+
+@st.cache_data
+def leer_excel(archivo, nombre_hoja):
+    """Lee una hoja específica de un archivo Excel."""
+    try:
+        return pd.read_excel(archivo, sheet_name=nombre_hoja)
+    except Exception as e:
+        st.error(f"Error al leer {archivo.name} ({nombre_hoja}): {e}")
         return pd.DataFrame()
 
 def normalizar_valor(valor):
@@ -72,10 +83,7 @@ def generar_clave_prioritaria(row, columnas, normalizar=False):
 
 @st.cache_data
 def consultar_openalex_batch(lista_issn, correo_openalex=None):
-    """
-    Consulta OpenAlex en lotes de 50 ISSN.
-    Incluye modo debug para ver las URLs generadas y las respuestas parciales.
-    """
+    """Consulta OpenAlex en lotes de 50 ISSN."""
     resultados = []
     base_url = "https://api.openalex.org/sources?filter=issn:"
     batch_size = 50
@@ -86,23 +94,11 @@ def consultar_openalex_batch(lista_issn, correo_openalex=None):
         if correo_openalex:
             url += f"&mailto={correo_openalex}"
 
-        print("\nLote consultado:", lote)
-        print("URL enviada:", url)
-
         try:
             r = requests.get(url)
-            print("Código HTTP:", r.status_code)
-
             if r.status_code == 200:
                 data = r.json()
-
-                if i == 0:
-                    st.markdown("### Respuesta de OpenAlex (vista parcial)")
-                    st.code(str(data)[:800], language="json")
-
                 resultados_lote = data.get("results", [])
-                print("Resultados recibidos:", len(resultados_lote))
-
                 for item in resultados_lote:
                     resultados.append({
                         "ISSN": item.get("issn_l"),
@@ -116,25 +112,37 @@ def consultar_openalex_batch(lista_issn, correo_openalex=None):
                         "Última actualización": item.get("updated_date", "")
                     })
             else:
-                print(f"Error {r.status_code}: {r.text[:200]}")
                 st.warning(f"Error {r.status_code} al consultar OpenAlex.")
-            
             time.sleep(0.3)
         except Exception as e:
-            print("Error de conexión:", e)
             st.error(f"Error consultando OpenAlex: {e}")
 
-    print(f"Total general de resultados recibidos: {len(resultados)}")
     return pd.DataFrame(resultados)
 
 # ======================================================
 # PROCESO PRINCIPAL
 # ======================================================
 if archivos:
-    dfs = [leer_excel(a) for a in archivos]
-    nombres = [a.name for a in archivos]
+    dfs = []
+    nombres = []
 
-    # CASO 1: CONSULTAR UN SOLO ARCHIVO
+    # Permitir elegir hoja por archivo
+    for archivo in archivos:
+        hojas = obtener_hojas(archivo)
+        if len(hojas) > 1:
+            hoja_seleccionada = st.selectbox(
+                f"El archivo '{archivo.name}' tiene varias hojas. Selecciona una:",
+                hojas,
+                key=f"hoja_{archivo.name}"
+            )
+        else:
+            hoja_seleccionada = hojas[0] if hojas else None
+
+        if hoja_seleccionada:
+            df = leer_excel(archivo, hoja_seleccionada)
+            dfs.append(df)
+            nombres.append(f"{archivo.name} ({hoja_seleccionada})")
+
     if len(archivos) == 1 and consultar_solo_uno:
         st.subheader("Vista previa del archivo cargado")
         df = dfs[0]
@@ -164,7 +172,7 @@ if archivos:
                            "Verifica el formato de los ISSN o el correo institucional.")
         st.stop()
 
-    # CASO 2: COMPARACIÓN ENTRE VARIOS ARCHIVOS
+    # COMPARACIÓN ENTRE VARIOS ARCHIVOS
     if len(archivos) > 1:
         st.subheader("Vista previa de los archivos cargados")
         for nombre, df in zip(nombres, dfs):
@@ -258,7 +266,6 @@ if archivos:
                     else:
                         st.warning("No se encontró columna 'ISSN' en los archivos para consultar OpenAlex.")
 
-                # === GENERAR ARCHIVO SOLO CUANDO SE PRESIONE DESCARGAR ===
                 st.divider()
                 st.markdown("Generar archivo Excel con los resultados")
 
