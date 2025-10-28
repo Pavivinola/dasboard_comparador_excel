@@ -1,7 +1,7 @@
 #  Comparador de Excels — Dashboard para análisis de duplicados y coincidencias
 
-**Desarrollado por:** Jorge Moreno  
-**Institución:** Biblioteca Patrimonial San Ignacio — Universidad Alberto Hurtado  
+**Desarrollado por:** Pavivinola  
+**Institución:** Biblioteca Patrimonial   
 **Proyecto:** Herramienta de análisis comparativo y metadatos con integración OpenAlex  
 **Framework:** Streamlit  
 
@@ -13,7 +13,7 @@
 para comparar múltiples archivos Excel (.xlsx), detectar coincidencias, identificar registros exclusivos  
 y consultar metadatos de revistas académicas mediante la API de **OpenAlex**.
 
-El sistema fue diseñado para apoyar procesos bibliográficos, adquisiciones y control de colecciones en entornos académicos o patrimoniales,  
+El sistema fue diseñado para apoyar procesos bibliográficos, adquisiciones y control de colecciones, 
 ofreciendo una interfaz visual simple y resultados descargables en Excel.
 
 ---
