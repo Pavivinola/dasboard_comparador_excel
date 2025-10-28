@@ -5,104 +5,103 @@ import os
 import requests
 import time
 from datetime import datetime
-import xlsxwriter
 import plotly.express as px
 
 # ======================================================
-# CONFIGURACIÓN DE LA APLICACIÓN
+# CONFIGURACIÓN DE LA PÁGINA
 # ======================================================
-st.set_page_config(page_title="Comparador de Excels", layout="wide") # Configuración de la página, título y diseño
-st.title("Dashboard Comparador de Excels") # Título principal de la aplicación
-st.markdown( # Descripción breve de la aplicación
-    "Esta herramienta permite comparar varios archivos Excel, detectar coincidencias y registros exclusivos, "
-    "y consultar metadatos de revistas en OpenAlex."
-)
-st.divider() # Línea divisoria
+st.set_page_config(page_title="Comparador de Excels", layout="wide")
+st.title("Dashboard Comparador de Excels")
+st.markdown("""
+Esta herramienta permite comparar varios archivos Excel (.xlsx),
+detectar coincidencias, encontrar registros exclusivos
+y consultar información de revistas en OpenAlex.
+""")
+st.divider()
 
 # ======================================================
 # PANEL LATERAL
 # ======================================================
-st.sidebar.header("Configuración") # Encabezado del panel lateral
+st.sidebar.header("Configuración")
 
-modo = st.sidebar.radio("Selecciona el modo de ejecución:", ["Rápido", "Avanzado"]) # Modo de ejecución
-usar_openalex = st.sidebar.checkbox("Consultar información en OpenAlex (batch)", value=False) # Opción para consultar OpenAlex
-consultar_solo_uno = st.sidebar.checkbox("Consultar OpenAlex para un solo archivo", value=False) # Opción para consultar OpenAlex solo para un archivo
+modo = st.sidebar.radio("Selecciona el modo de ejecución:", ["Rápido", "Avanzado"])
+usar_openalex = st.sidebar.checkbox("Consultar información en OpenAlex (batch)", value=False)
+consultar_solo_uno = st.sidebar.checkbox("Consultar OpenAlex para un solo archivo", value=False)
 
-correo_openalex = st.sidebar.text_input( # Campo para ingresar correo institucional
+correo_openalex = st.sidebar.text_input(
     "Correo para identificarte ante OpenAlex (recomendado)",
-    placeholder="tucorreo@institucion.cl" # Placeholder del campo
+    placeholder="tucorreo@institucion.cl"
 )
 
-archivos = st.sidebar.file_uploader( # Esta variable permite subir archivos Excel
+archivos = st.sidebar.file_uploader(
     "Sube uno o más archivos Excel (.xlsx)",
-    type="xlsx", # Tipo de archivo permitido
-    accept_multiple_files=True # Permitir subir múltiples archivos
+    type="xlsx",
+    accept_multiple_files=True
 )
 
 # ======================================================
 # FUNCIONES AUXILIARES
 # ======================================================
-@st.cache_data # Esto es para cachear los datos y evitar recargas innecesarias
-def leer_excel(archivo): # Función para leer un archivo Excel y manejar errores
-    try:  # Intentar leer el archivo Excel
-        return pd.read_excel(archivo) # Si lo lee, devuelve el DataFrame
-    except Exception as e: # Si hay un error, lo muestra en pantalla
-        st.error(f"Error al leer {archivo.name}: {e}") # Muestra el error
-        return pd.DataFrame() # Devuelve un DataFrame vacío en caso de error
+@st.cache_data
+def leer_excel(archivo):
+    try:
+        return pd.read_excel(archivo)
+    except Exception as e:
+        st.error(f"Error al leer {archivo.name}: {e}")
+        return pd.DataFrame()
 
-def normalizar_valor(valor): # Esta función normaliza valores como ISSN, ISBN, etc.
+def normalizar_valor(valor):
     """Normaliza ISSN, ISBN, EISSN, etc."""
-    if pd.isna(valor): # Si el valor es NaN, devuelve cadena vacía
-        return "" # Devuelve cadena vacía para valores NaN
-    valor = str(valor).strip().upper() # Convierte a cadena, elimina espacios y pone en mayúsculas
-    valor = valor.replace("-", "").replace(" ", "").replace(".", "") # Elimina guiones, espacios y puntos
-    if valor.isdigit() and len(valor) == 8: # Si es un número de 8 dígitos, formatea como ISSN 
-        return valor # Retorna el valor normalizado
-    return valor # Retorna el valor normalizado
+    if pd.isna(valor):
+        return ""
+    valor = str(valor).strip().upper()
+    valor = valor.replace("-", "").replace(" ", "").replace(".", "")
+    if valor.isdigit() and len(valor) == 8:
+        return valor
+    return valor
 
-def generar_clave_prioritaria(row, columnas, normalizar=False):  # Función para generar clave prioritaria
+def generar_clave_prioritaria(row, columnas, normalizar=False):
     """Devuelve la primera columna con valor válido, con o sin normalización."""
-    for col in columnas: # Recorre las columnas especificadas
-        valor = row[col] # Obtiene el valor de la columna actual
-        if normalizar: # Si se requiere normalización
-            valor = normalizar_valor(valor) # Normaliza el valor
-        if valor and str(valor).lower() != "nan": # Si el valor es válido
-            return valor # Retorna el valor válido
-    return None # Si no hay valores válidos, retorna None
-@st.cache_data # Cachea los datos para evitar recargas innecesarias
-def consultar_openalex_batch(lista_issn, correo_openalex=None): # Esta función consulta OpenAlex en lotes
+    for col in columnas:
+        valor = row[col]
+        if normalizar:
+            valor = normalizar_valor(valor)
+        if valor and str(valor).lower() != "nan":
+            return valor
+    return None
+
+@st.cache_data
+def consultar_openalex_batch(lista_issn, correo_openalex=None):
     """
     Consulta OpenAlex en lotes de 50 ISSN.
     Incluye modo debug para ver las URLs generadas y las respuestas parciales.
     """
-    resultados = [] # Lista para almacenar los resultados
-    base_url = "https://api.openalex.org/sources?filter=issn:" # URL base de la API de OpenAlex
-    batch_size = 50 # Tamaño del lote de consultas
+    resultados = []
+    base_url = "https://api.openalex.org/sources?filter=issn:"
+    batch_size = 50
 
-    for i in range(0, len(lista_issn), batch_size): # Recorre la lista de ISSN en lotes
-        lote = lista_issn[i:i + batch_size] # Obtiene el lote actual
-        url = base_url + "|".join(lote) # Construye la URL de consulta para el lote
-        if correo_openalex: # Si se porporciona correo, lo añade a la URL
-            url += f"&mailto={correo_openalex}" # Añade el correo a la URL
+    for i in range(0, len(lista_issn), batch_size):
+        lote = lista_issn[i:i + batch_size]
+        url = base_url + "|".join(lote)
+        if correo_openalex:
+            url += f"&mailto={correo_openalex}"
 
-        # === DEBUG: Mostrar información en consola ===
-        print("\n🔍 Lote consultado:", lote) # Muestra en consola
-        print("🌐 URL enviada:", url) # 
+        print("\nLote consultado:", lote)
+        print("URL enviada:", url)
 
-        try: # Intenta realizar la consulta
-            r = requests.get(url) # Realiza la solicitud GET a la API
-            print(" Código HTTP:", r.status_code) # Muestra el código de estado HTTP
+        try:
+            r = requests.get(url)
+            print("Código HTTP:", r.status_code)
 
-            if r.status_code == 200: # Is la respuesta es exitosa (200)
-                data = r.json() # Parsea la respuesta JSON
+            if r.status_code == 200:
+                data = r.json()
 
-                # Mostrar parte del JSON para inspección (solo en el primer lote)
                 if i == 0:
-                    st.markdown("### 🧩 Respuesta de OpenAlex (vista parcial)")
+                    st.markdown("### Respuesta de OpenAlex (vista parcial)")
                     st.code(str(data)[:800], language="json")
 
                 resultados_lote = data.get("results", [])
-                print("📦 Resultados recibidos:", len(resultados_lote))
+                print("Resultados recibidos:", len(resultados_lote))
 
                 for item in resultados_lote:
                     resultados.append({
@@ -111,54 +110,22 @@ def consultar_openalex_batch(lista_issn, correo_openalex=None): # Esta función 
                         "País": item.get("country_code", ""),
                         "Tipo": item.get("type", ""),
                         "Acceso abierto": "Sí" if item.get("is_oa") else "No",
+                        "Publisher": item.get("host_organization_name", ""),
+                        "Total artículos": item.get("works_count", ""),
+                        "Citado por": item.get("cited_by_count", ""),
                         "Última actualización": item.get("updated_date", "")
                     })
             else:
-                print(f"⚠️ Error {r.status_code} en la consulta. Texto: {r.text[:200]}")
+                print(f"Error {r.status_code}: {r.text[:200]}")
                 st.warning(f"Error {r.status_code} al consultar OpenAlex.")
             
-            time.sleep(0.3)  # pequeña pausa entre lotes
-
+            time.sleep(0.3)
         except Exception as e:
-            print("❌ Error de conexión:", e)
+            print("Error de conexión:", e)
             st.error(f"Error consultando OpenAlex: {e}")
 
-    print(f"\n✅ Total general de resultados recibidos: {len(resultados)}")
+    print(f"Total general de resultados recibidos: {len(resultados)}")
     return pd.DataFrame(resultados)
-
-# @st.cache_data
-# def consultar_openalex_batch(lista_issn, correo_openalex=None):
-#     """Consulta OpenAlex en lotes de 50 ISSN con opción de incluir correo institucional."""
-#     resultados = []
-#     base_url = "https://api.openalex.org/sources?filter=issn:"
-#     batch_size = 50
-
-#     for i in range(0, len(lista_issn), batch_size):
-#         lote = lista_issn[i:i + batch_size]
-#         url = base_url + "|".join(lote)
-#         if correo_openalex:
-#             url += f"&mailto={correo_openalex}"
-
-#         try:
-#             r = requests.get(url)
-#             if r.status_code == 200:
-#                 data = r.json()
-#                 for item in data.get("results", []):
-#                     resultados.append({
-#                         "ISSN": item.get("issn_l"),
-#                         "Nombre revista": item.get("display_name", ""),
-#                         "País": item.get("country_code", ""),
-#                         "Tipo": item.get("type", ""),
-#                         "Acceso abierto": "Sí" if item.get("is_oa") else "No",
-#                         "Última actualización": item.get("updated_date", "")
-#                     })
-#             else:
-#                 st.warning(f"Error {r.status_code} en la consulta a OpenAlex.")
-#             time.sleep(0.3)
-#         except Exception as e:
-#             st.error(f"Error consultando OpenAlex: {e}")
-
-#     return pd.DataFrame(resultados)
 
 # ======================================================
 # PROCESO PRINCIPAL
@@ -167,14 +134,12 @@ if archivos:
     dfs = [leer_excel(a) for a in archivos]
     nombres = [a.name for a in archivos]
 
-    # ------------------------------------------------------
-    # CASO: CONSULTAR SOLO UN ARCHIVO CON OPENALEX
-    # ------------------------------------------------------
+    # CASO 1: CONSULTAR UN SOLO ARCHIVO
     if len(archivos) == 1 and consultar_solo_uno:
-        st.subheader("Vista previa del archivo")
+        st.subheader("Vista previa del archivo cargado")
         df = dfs[0]
         filas, columnas = df.shape
-        st.markdown(f"**{nombres[0]}** — {filas} filas × {columnas} columnas")
+        st.markdown(f"{nombres[0]} — {filas} filas × {columnas} columnas")
         st.dataframe(df.head(10))
 
         columna_issn = st.selectbox("Selecciona la columna que contiene ISSN o E-ISSN", df.columns)
@@ -199,20 +164,15 @@ if archivos:
                            "Verifica el formato de los ISSN o el correo institucional.")
         st.stop()
 
-    # ------------------------------------------------------
-    # CASO: COMPARACIÓN ENTRE VARIOS ARCHIVOS
-    # ------------------------------------------------------
+    # CASO 2: COMPARACIÓN ENTRE VARIOS ARCHIVOS
     if len(archivos) > 1:
-        # Vista previa
         st.subheader("Vista previa de los archivos cargados")
         for nombre, df in zip(nombres, dfs):
             filas, columnas = df.shape
-            st.markdown(f"**{nombre}** — {filas} filas × {columnas} columnas")
+            st.markdown(f"{nombre} — {filas} filas × {columnas} columnas")
             st.dataframe(df.head(10))
             st.markdown("---")
-        st.divider()
 
-        # Selección de columnas clave
         columnas_comunes = set(dfs[0].columns)
         for df in dfs[1:]:
             columnas_comunes &= set(df.columns)
@@ -235,24 +195,20 @@ if archivos:
                     )
                     df.dropna(subset=["__clave__"], inplace=True)
 
-                # Unir claves y comparar
                 claves = pd.concat([df[["__clave__"]] for df in dfs], keys=range(len(dfs)))
                 claves["Archivo"] = claves.index.get_level_values(0)
                 conteo = claves.groupby("__clave__")["Archivo"].nunique()
 
-                # Coincidencias
                 claves_comunes = conteo[conteo > 1].index
                 coincidencias_total = pd.concat([
                     df[df["__clave__"].isin(claves_comunes)] for df in dfs
                 ]).drop(columns=["__clave__"])
 
-                # Exclusivos
                 exclusivos_por_archivo = [
                     df[df["__clave__"].isin(conteo[conteo == 1].index)].drop(columns=["__clave__"])
                     for df in dfs
                 ]
 
-                # Resultados básicos
                 total_exclusivos = sum(len(df) for df in exclusivos_por_archivo)
                 st.divider()
                 st.subheader("Resumen general")
@@ -261,34 +217,32 @@ if archivos:
                 c2.metric("Coincidencias encontradas", len(coincidencias_total))
                 c3.metric("Registros exclusivos", total_exclusivos)
 
-                # Gráficos
-                st.markdown("### Visualización de resultados")
+                st.markdown("Visualización de resultados")
                 fig1 = px.pie(
                     pd.DataFrame({
                         "Tipo": ["Coincidencias", "Exclusivos"],
                         "Cantidad": [len(coincidencias_total), total_exclusivos]
                     }),
                     names="Tipo", values="Cantidad",
-                    title="Coincidencias vs Exclusivos",
+                    title="Distribución general de registros",
                     color="Tipo",
                     color_discrete_map={"Coincidencias": "#2ECC71", "Exclusivos": "#3498DB"}
                 )
                 fig1.update_traces(textinfo="percent+value")
                 st.plotly_chart(fig1, use_container_width=True)
 
-                if len(archivos) > 1:
-                    fig2 = px.pie(
-                        pd.DataFrame({
-                            "Archivo": nombres,
-                            "Exclusivos": [len(df) for df in exclusivos_por_archivo],
-                        }),
-                        names="Archivo", values="Exclusivos",
-                        title="Distribución de Exclusivos por Archivo",
-                    )
-                    fig2.update_traces(textinfo="percent+value")
-                    st.plotly_chart(fig2, use_container_width=True)
+                fig2 = px.bar(
+                    pd.DataFrame({
+                        "Archivo": nombres,
+                        "Exclusivos": [len(df) for df in exclusivos_por_archivo],
+                    }),
+                    x="Archivo", y="Exclusivos",
+                    title="Registros exclusivos por archivo",
+                    text_auto=True,
+                    color="Archivo"
+                )
+                st.plotly_chart(fig2, use_container_width=True)
 
-                # Consultar OpenAlex (solo coincidencias)
                 df_openalex = pd.DataFrame()
                 if usar_openalex:
                     st.info("Consultando OpenAlex para coincidencias...")
@@ -304,58 +258,58 @@ if archivos:
                     else:
                         st.warning("No se encontró columna 'ISSN' en los archivos para consultar OpenAlex.")
 
-                # Generar Excel
-                fecha = datetime.now().strftime("%Y-%m-%d_%H-%M")
-                nombre_salida = f"resultado_comparacion_{fecha}.xlsx"
-                ruta_salida = os.path.join(os.getcwd(), nombre_salida)
-                output = io.BytesIO()
+                # === GENERAR ARCHIVO SOLO CUANDO SE PRESIONE DESCARGAR ===
+                st.divider()
+                st.markdown("Generar archivo Excel con los resultados")
 
-                with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-                    workbook = writer.book
-                    formato_titulo = workbook.add_format({
-                        "bold": True, "font_color": "white",
-                        "bg_color": "#004D40", "border": 1
-                    })
-                    formato_general = workbook.add_format({"border": 1})
-                    formato_texto = workbook.add_format({"text_wrap": True, "border": 1})
+                if st.button("Generar y preparar archivo para descarga"):
+                    with st.spinner("Generando archivo Excel... por favor espera unos segundos."):
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+                            workbook = writer.book
 
-                    resumen = pd.DataFrame({
-                        "Parámetro": ["Fecha", "Modo", "Archivos", "Columnas clave", "Coincidencias", "Exclusivos totales"],
-                        "Valor": [datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                  modo, ", ".join(nombres),
-                                  ", ".join(columnas_clave),
-                                  len(coincidencias_total), total_exclusivos]
-                    })
-                    resumen.to_excel(writer, sheet_name="Resumen", index=False)
-                    hoja_resumen = writer.sheets["Resumen"]
-                    hoja_resumen.set_column("A:A", 35, formato_general)
-                    hoja_resumen.set_column("B:B", 60, formato_general)
-                    hoja_resumen.write_row("A1", ["Parámetro", "Valor"], formato_titulo)
+                            resumen = pd.DataFrame({
+                                "Parámetro": [
+                                    "Fecha de generación",
+                                    "Modo de ejecución",
+                                    "Archivos comparados",
+                                    "Columnas clave",
+                                    "Coincidencias encontradas",
+                                    "Registros exclusivos totales"
+                                ],
+                                "Valor": [
+                                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    modo,
+                                    ", ".join(nombres),
+                                    ", ".join(columnas_clave),
+                                    len(coincidencias_total),
+                                    total_exclusivos
+                                ]
+                            })
+                            resumen.to_excel(writer, sheet_name="Resumen", index=False)
+                            coincidencias_total.to_excel(writer, sheet_name="Coincidencias", index=False)
 
-                    coincidencias_total.to_excel(writer, sheet_name="Coincidencias", index=False)
-                    for i, exclusivos in enumerate(exclusivos_por_archivo):
-    # Limpiar el nombre del archivo (sin extensión ni caracteres prohibidos)
-                        nombre_limpio = os.path.splitext(nombres[i])[0]  # quita .xlsx
-                        nombre_limpio = "".join(c for c in nombre_limpio if c.isalnum() or c in (" ", "_", "-"))
-                        nombre_hoja = f"Exclusivos_{nombre_limpio}"[:31]  # máximo 31 caracteres
+                            for i, exclusivos in enumerate(exclusivos_por_archivo):
+                                nombre_limpio = os.path.splitext(nombres[i])[0]
+                                nombre_limpio = "".join(c for c in nombre_limpio if c.isalnum() or c in (" ", "_", "-"))
+                                nombre_hoja = f"Exclusivos_{nombre_limpio}"[:31]
+                                exclusivos.to_excel(writer, sheet_name=nombre_hoja, index=False)
 
-                        exclusivos.to_excel(writer, sheet_name=nombre_hoja, index=False)
+                            if 'df_openalex' in locals() and not df_openalex.empty:
+                                df_openalex.to_excel(writer, sheet_name="OpenAlex_Resultados", index=False)
 
-                    # for i, exclusivos in enumerate(exclusivos_por_archivo):
-                    #     exclusivos.to_excel(writer, sheet_name=f"Exclusivos_{nombres[i][:25]}", index=False)
+                        output.seek(0)
+                        st.session_state["excel_resultado"] = output.getvalue()
 
-                    if not df_openalex.empty:
-                        df_openalex.to_excel(writer, sheet_name="OpenAlex_Resultados", index=False)
+                    st.success("Archivo Excel generado correctamente. Ahora puedes descargarlo.")
 
-                with open(ruta_salida, "wb") as f:
-                    f.write(output.getvalue())
-                output.seek(0)
-                st.download_button(
-                    "Descargar archivo Excel con resultados",
-                    data=output,
-                    file_name=nombre_salida,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                if "excel_resultado" in st.session_state:
+                    st.download_button(
+                        label="Descargar archivo Excel con resultados",
+                        data=st.session_state["excel_resultado"],
+                        file_name=f"resultado_comparacion_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
         else:
             st.warning("Selecciona al menos una columna clave para realizar la comparación.")
 else:
