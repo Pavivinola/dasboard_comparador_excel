@@ -43,22 +43,11 @@ archivos = st.sidebar.file_uploader(
 # FUNCIONES AUXILIARES
 # ======================================================
 @st.cache_data
-def obtener_hojas(archivo):
-    """Devuelve la lista de hojas de un archivo Excel."""
+def leer_excel(archivo):
     try:
-        xls = pd.ExcelFile(archivo)
-        return xls.sheet_names
+        return pd.read_excel(archivo)
     except Exception as e:
-        st.error(f"No se pudieron leer las hojas de {archivo.name}: {e}")
-        return []
-
-@st.cache_data
-def leer_excel(archivo, nombre_hoja):
-    """Lee una hoja específica de un archivo Excel."""
-    try:
-        return pd.read_excel(archivo, sheet_name=nombre_hoja)
-    except Exception as e:
-        st.error(f"Error al leer {archivo.name} ({nombre_hoja}): {e}")
+        st.error(f"Error al leer {archivo.name}: {e}")
         return pd.DataFrame()
 
 def normalizar_valor(valor):
@@ -123,47 +112,17 @@ def consultar_openalex_batch(lista_issn, correo_openalex=None):
 # PROCESO PRINCIPAL
 # ======================================================
 if archivos:
-    dfs = []
-    nombres = []
+    dfs = [leer_excel(a) for a in archivos]
+    nombres = [a.name for a in archivos]
 
-    st.subheader("Archivos cargados")
-
-    # Selección de hoja y vista previa inmediata
-    for archivo in archivos:
-        hojas = obtener_hojas(archivo)
-        if not hojas:
-            st.warning(f"No se detectaron hojas en {archivo.name}")
-            continue
-
-        if len(hojas) > 1:
-            hoja_key = f"hoja_{archivo.name}"
-            hoja_sel = st.selectbox(
-                f"El archivo '{archivo.name}' tiene varias hojas. Selecciona una:",
-                hojas,
-                key=hoja_key
-            )
-        else:
-            hoja_sel = hojas[0]
-
-        df = leer_excel(archivo, hoja_sel)
-        if not df.empty:
-            dfs.append(df)
-            nombres.append(f"{archivo.name} ({hoja_sel})")
-
-            filas, cols = df.shape
-            st.markdown(f"**{archivo.name} ({hoja_sel})** — {filas} filas × {cols} columnas")
-            st.dataframe(df.head(10))
-            st.markdown("---")
-        else:
-            st.warning(f"La hoja '{hoja_sel}' de {archivo.name} está vacía o no se pudo leer.")
-
-    if not dfs:
-        st.warning("No se ha seleccionado ninguna hoja válida para comparar.")
-        st.stop()
-
-    # --- Consulta OpenAlex para un solo archivo ---
+    # CASO 1: CONSULTAR UN SOLO ARCHIVO
     if len(archivos) == 1 and consultar_solo_uno:
+        st.subheader("Vista previa del archivo cargado")
         df = dfs[0]
+        filas, columnas = df.shape
+        st.markdown(f"{nombres[0]} — {filas} filas × {columnas} columnas")
+        st.dataframe(df.head(10))
+
         columna_issn = st.selectbox("Selecciona la columna que contiene ISSN o E-ISSN", df.columns)
         if st.button("Consultar OpenAlex"):
             issn_unicos = df[columna_issn].dropna().astype(str).unique().tolist()
@@ -182,11 +141,19 @@ if archivos:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             else:
-                st.warning("No se obtuvieron resultados desde OpenAlex.")
+                st.warning("No se obtuvieron resultados desde OpenAlex. "
+                           "Verifica el formato de los ISSN o el correo institucional.")
         st.stop()
 
-    # --- Comparación entre varios archivos ---
+    # CASO 2: COMPARACIÓN ENTRE VARIOS ARCHIVOS
     if len(archivos) > 1:
+        st.subheader("Vista previa de los archivos cargados")
+        for nombre, df in zip(nombres, dfs):
+            filas, columnas = df.shape
+            st.markdown(f"{nombre} — {filas} filas × {columnas} columnas")
+            st.dataframe(df.head(10))
+            st.markdown("---")
+
         columnas_comunes = set(dfs[0].columns)
         for df in dfs[1:]:
             columnas_comunes &= set(df.columns)
@@ -224,7 +191,6 @@ if archivos:
                 ]
 
                 total_exclusivos = sum(len(df) for df in exclusivos_por_archivo)
-
                 st.divider()
                 st.subheader("Resumen general")
                 c1, c2, c3 = st.columns(3)
@@ -232,6 +198,7 @@ if archivos:
                 c2.metric("Coincidencias encontradas", len(coincidencias_total))
                 c3.metric("Registros exclusivos", total_exclusivos)
 
+                st.markdown("Visualización de resultados")
                 fig1 = px.pie(
                     pd.DataFrame({
                         "Tipo": ["Coincidencias", "Exclusivos"],
@@ -267,17 +234,21 @@ if archivos:
                             st.success(f"Se obtuvieron {len(df_openalex)} registros desde OpenAlex.")
                             st.dataframe(df_openalex.head(20))
                         else:
-                            st.warning("No se obtuvieron resultados desde OpenAlex.")
+                            st.warning("No se obtuvieron resultados desde OpenAlex. "
+                                       "Verifica el formato de los ISSN o el correo ingresado.")
                     else:
-                        st.warning("No se encontró columna 'ISSN' en los archivos.")
+                        st.warning("No se encontró columna 'ISSN' en los archivos para consultar OpenAlex.")
 
+                # === GENERAR ARCHIVO SOLO CUANDO SE PRESIONE DESCARGAR ===
                 st.divider()
                 st.markdown("Generar archivo Excel con los resultados")
 
                 if st.button("Generar y preparar archivo para descarga"):
-                    with st.spinner("Generando archivo Excel..."):
+                    with st.spinner("Generando archivo Excel... por favor espera unos segundos."):
                         output = io.BytesIO()
                         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+                            workbook = writer.book
+
                             resumen = pd.DataFrame({
                                 "Parámetro": [
                                     "Fecha de generación",
