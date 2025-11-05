@@ -11,7 +11,7 @@ import plotly.express as px
 # CONFIGURACIÓN DE LA PÁGINA
 # ======================================================
 st.set_page_config(page_title="Compareitor", layout="wide")
-st.title("Dashboard Comparador de Excels")
+st.title("Compareitor")
 st.markdown("""
 Esta herramienta permite comparar varios archivos Excel (.xlsx),
 detectar coincidencias, encontrar registros exclusivos
