@@ -10,8 +10,8 @@ import plotly.express as px
 # ======================================================
 # CONFIGURACIÓN DE LA PÁGINA
 # ======================================================
-st.set_page_config(page_title="Compareitor", layout="wide")
-st.title("Compareitor")
+st.set_page_config(page_title="Comparador de Excels", layout="wide")
+st.title("Dashboard Comparador de Excels")
 st.markdown("""
 Esta herramienta permite comparar varios archivos Excel (.xlsx),
 detectar coincidencias, encontrar registros exclusivos
@@ -22,7 +22,7 @@ st.divider()
 # ======================================================
 # PANEL LATERAL
 # ======================================================
-st.sidebar.header("Configuración") # Este st. es para el panel lateral
+st.sidebar.header("Configuración")
 
 modo = st.sidebar.radio("Selecciona el modo de ejecución:", ["Rápido", "Avanzado"])
 usar_openalex = st.sidebar.checkbox("Consultar información en OpenAlex (batch)", value=False)
@@ -35,7 +35,7 @@ correo_openalex = st.sidebar.text_input(
 
 archivos = st.sidebar.file_uploader(
     "Sube uno o más archivos Excel (.xlsx)",
-    type="xlsx", # Con esto solo se aceptan archivos .xlsx, en caso de que se agreguen otros tipos de archivo, salta un error
+    type="xlsx",
     accept_multiple_files=True
 )
 
@@ -44,19 +44,28 @@ archivos = st.sidebar.file_uploader(
 # ======================================================
 @st.cache_data
 def leer_excel(archivo):
+    """Lee un archivo Excel y elimina filas completamente vacías."""
     try:
-        return pd.read_excel(archivo)
+        df = pd.read_excel(archivo)
+        df = df.dropna(how="all")
+        df.columns = df.columns.str.strip()
+        return df
     except Exception as e:
         st.error(f"Error al leer {archivo.name}: {e}")
         return pd.DataFrame()
 
 def normalizar_valor(valor):
-    """Normaliza ISSN, ISBN, EISSN, etc. Conserva el guion en posición 4 si aplica."""
+    """
+    Normaliza ISSN, ISBN, EISSN, etc.
+    - Elimina espacios, puntos y símbolos.
+    - Conserva el formato estándar ####-#### si aplica.
+    """
     if pd.isna(valor):
         return ""
     valor = str(valor).strip().upper().replace(" ", "").replace(".", "")
+    valor = valor.replace("_", "").replace("–", "-").replace("—", "-").replace("−", "-")
     valor = valor.replace("-", "")
-    # Si parece un ISSN válido (8 caracteres), volver a agregar guion estándar
+    # Si son 8 caracteres numéricos o alfanuméricos, se agrega guion estándar
     if len(valor) == 8 and valor.isalnum():
         return valor[:4] + "-" + valor[4:]
     return valor
@@ -64,32 +73,31 @@ def normalizar_valor(valor):
 def obtener_issn_validos(df, columna):
     """
     Limpia y valida los ISSN de una columna.
-    Devuelve una lista de ISSN únicos válidos (8 caracteres alfanuméricos, con guion).
+    Devuelve una lista de ISSN únicos válidos (8 caracteres + guion).
     """
     if columna not in df.columns:
         st.warning(f"La columna '{columna}' no existe en el archivo.")
         return []
 
-    # Convertir a texto, limpiar espacios, aplicar normalización
     df[columna] = df[columna].astype(str).fillna("").str.strip()
     df[columna] = df[columna].apply(normalizar_valor)
-
-    # Filtrar válidos
     issn_unicos = [i for i in df[columna].unique() if len(i) == 9 and "-" in i]
 
-    # Mostrar diagnóstico
     st.write(f"ISSN detectados en '{columna}':", issn_unicos[:15])
     st.write(f"Total ISSN válidos: {len(issn_unicos)}")
 
     return issn_unicos
 
 def generar_clave_prioritaria(row, columnas, normalizar=False):
-    """Devuelve la primera columna con valor válido, con o sin normalización."""
+    """
+    Devuelve la primera columna con valor válido.
+    Si normalizar=True, aplica formato estándar (por ejemplo, ISSN ####-####).
+    """
     for col in columnas:
         valor = row[col]
-        if normalizar:
-            valor = normalizar_valor(valor)
         if valor and str(valor).lower() != "nan":
+            if normalizar:
+                valor = normalizar_valor(valor)
             return valor
     return None
 
@@ -97,9 +105,7 @@ def generar_clave_prioritaria(row, columnas, normalizar=False):
 # CONSULTA A OPENALEX
 # ======================================================
 def consultar_openalex_batch(issn_list, correo):
-    """
-    Consulta la API de OpenAlex en lotes de 30 ISSN (formato XXXX-XXXX, separados por coma).
-    """
+    """Consulta la API de OpenAlex en lotes de 30 ISSN (formato ####-####, separados por coma)."""
     resultados = []
     lote_size = 30
     base_url = "https://api.openalex.org/sources"
@@ -209,10 +215,13 @@ if archivos:
 
             if columnas_clave:
                 for df in dfs:
-                    df[columnas_clave] = df[columnas_clave].fillna("")
+                    # Normalizar todas las columnas clave antes de crear claves
+                    for col in columnas_clave:
+                        df[col] = df[col].astype(str).apply(normalizar_valor)
+
                     df["__clave__"] = df.apply(
-                        lambda r: generar_clave_prioritaria( #El lambda usa la función definida arriba
-                            r, columnas_clave, normalizar=(modo == "Avanzado")
+                        lambda r: generar_clave_prioritaria(
+                            r, columnas_clave, normalizar=True
                         ),
                         axis=1,
                     )
