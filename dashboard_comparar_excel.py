@@ -28,6 +28,7 @@ st.sidebar.header("Configuración")
 modo = st.sidebar.radio("Selecciona el modo de ejecución:", ["Rápido", "Avanzado"])
 usar_openalex = st.sidebar.checkbox("Consultar información en OpenAlex (batch)", value=False)
 consultar_solo_uno = st.sidebar.checkbox("Consultar OpenAlex para un solo archivo", value=False)
+comparar_fechas = st.sidebar.checkbox("Comparar fechas", value=False)
 
 correo_openalex = st.sidebar.text_input(
     "Correo para identificarte ante OpenAlex (recomendado)",
@@ -46,7 +47,7 @@ archivos = st.sidebar.file_uploader(
 def es_entorno_local():
     try:
         ip_local = socket.gethostbyname(socket.gethostname())
-        return ip_local.startswith("127.") or ip_local.startswith("192.") or ip_local.startswith("10.")
+        return ip_local.startswith(("127.", "192.", "10."))
     except:
         return True
 
@@ -98,7 +99,52 @@ def obtener_issn_validos(df, columna):
     return [i for i in df[columna].unique() if len(i) == 9 and "-" in i]
 
 # ======================================================
-# FUNCIÓN DE CONSULTA OPENALEX (COMPATIBLE 2025)
+# FUNCIÓN: PROCESAR FECHAS
+# ======================================================
+def procesar_fechas(df):
+    """
+    Procesa las fechas de un DataFrame según las columnas detectadas:
+    - Si existe 'Fecha Rango', se copia directamente al resultado.
+    - Si existen 'Fecha Inicio', 'Fecha Termino' y 'Retraso', se calcula un rango "AAAA_inicio - AAAA_final".
+    """
+    if df.empty:
+        return df
+
+    df = df.copy()
+
+    # Caso 1: si existe la columna 'Fecha Rango', se copia directamente
+    if "Fecha Rango" in df.columns:
+        df["Rango Calculado"] = df["Fecha Rango"]
+        return df
+
+    # Caso 2: si existen 'Fecha Inicio', 'Fecha Termino' y 'Retraso'
+    cols = df.columns.str.lower()
+    if all(c in cols for c in ["fecha inicio", "fecha termino", "retraso"]):
+        col_inicio = [c for c in df.columns if c.lower() == "fecha inicio"][0]
+        col_fin = [c for c in df.columns if c.lower() == "fecha termino"][0]
+        col_retraso = [c for c in df.columns if c.lower() == "retraso"][0]
+
+        df[col_inicio] = pd.to_datetime(df[col_inicio], errors="coerce").dt.year
+        df[col_fin] = pd.to_datetime(df[col_fin], errors="coerce").dt.year
+        df[col_fin] = df[col_fin].fillna(datetime.now().year)
+
+        df[col_retraso] = pd.to_numeric(df[col_retraso], errors="coerce").fillna(0)
+        df["_retraso_anios"] = (df[col_retraso] // 12).astype(int)
+
+        def calcular_rango(row):
+            if pd.isna(row[col_inicio]):
+                return None
+            inicio = int(row[col_inicio])
+            fin = int(row[col_fin]) - int(row["_retraso_anios"])
+            return f"{inicio} - {fin}"
+
+        df["Rango Calculado"] = df.apply(calcular_rango, axis=1)
+        df = df.drop(columns=["_retraso_anios"], errors="ignore")
+
+    return df
+
+# ======================================================
+# FUNCIÓN DE CONSULTA OPENALEX
 # ======================================================
 def consultar_openalex_batch(issn_list, correo_openalex=None):
     """
@@ -253,6 +299,14 @@ if archivos:
 
                 total_exclusivos = sum(len(df) for df in exclusivos_por_archivo)
 
+                # === PROCESAR FECHAS (solo si el check está activado)
+                if comparar_fechas:
+                    st.info("Procesando columnas de fechas detectadas...")
+                    coincidencias_total = procesar_fechas(coincidencias_total)
+                    for i in range(len(exclusivos_por_archivo)):
+                        exclusivos_por_archivo[i] = procesar_fechas(exclusivos_por_archivo[i])
+                    st.success("Procesamiento de fechas completado.")
+
                 # === RESUMEN ===
                 st.divider()
                 st.subheader("Resumen general")
@@ -326,7 +380,7 @@ if archivos:
                             resumen.to_excel(writer, sheet_name="Resumen", index=False)
 
                             coincidencias_unicas = coincidencias_total.drop_duplicates(subset="__clave__", keep="first")
-                            columnas_salida = [col for col in coincidencias_unicas.columns if col in ("Titulo", "__clave__")]
+                            columnas_salida = [col for col in coincidencias_unicas.columns if col in ("Titulo", "__clave__", "Rango Calculado")]
                             coincidencias_salida = coincidencias_unicas[columnas_salida].rename(
                                 columns={"__clave__": "Clave usada"}
                             )
