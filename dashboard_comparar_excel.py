@@ -37,7 +37,7 @@ correo_openalex = st.sidebar.text_input(
 
 archivos = st.sidebar.file_uploader(
     "Sube uno o más archivos Excel (.xlsx)",
-    type="xlsx",
+    type=["xlsx","xls"],
     accept_multiple_files=True
 )
 
