@@ -11,7 +11,7 @@ import plotly.express as px
 # CONFIGURACIÓN DE LA PÁGINA
 # ======================================================
 st.set_page_config(page_title="Comparador de Excels", layout="wide")
-st.title("Dashboard Comparador de Excels")
+st.title("Compareitor")
 st.markdown("""
 Esta herramienta permite comparar varios archivos Excel (.xlsx o .xls),
 detectar coincidencias, encontrar registros exclusivos
@@ -102,7 +102,7 @@ def obtener_issn_de_dataframe(df):
     # Buscar columnas que contengan ISSN
     columnas_issn = [col for col in df.columns if 'ISSN' in col.upper() or 'E-ISSN' in col.upper()]
     
-    st.write(f"🔍 Columnas ISSN detectadas: {columnas_issn}")
+    st.write(f" Columnas ISSN detectadas: {columnas_issn}")
     
     for col in columnas_issn:
         valores = df[col].dropna().astype(str).unique()
@@ -113,9 +113,9 @@ def obtener_issn_de_dataframe(df):
     
     # Eliminar duplicados
     issn_list = list(set(issn_list))
-    st.write(f"📋 Total ISSN válidos encontrados: {len(issn_list)}")
+    st.write(f" Total ISSN válidos encontrados: {len(issn_list)}")
     if issn_list:
-        st.write(f"📝 Primeros ISSN: {issn_list[:10]}")
+        st.write(f" Primeros ISSN: {issn_list[:10]}")
     
     return issn_list
 
@@ -127,11 +127,11 @@ def consultar_openalex_batch(issn_list, correo_openalex=None):
     batch_size = 50
 
     if not issn_list:
-        st.warning("⚠️ No se encontraron ISSN válidos para consultar en OpenAlex.")
+        st.warning(" No se encontraron ISSN válidos para consultar en OpenAlex.")
         return pd.DataFrame()
 
     if not correo_openalex or "@" not in correo_openalex:
-        st.error("❌ Por favor ingresa un correo institucional válido para usar la API de OpenAlex.")
+        st.error(" Por favor ingresa un correo institucional válido para usar la API de OpenAlex.")
         return pd.DataFrame()
 
     headers = {
@@ -146,7 +146,7 @@ def consultar_openalex_batch(issn_list, correo_openalex=None):
     inicio = time.time()
     
     total_lotes = (len(issn_list) + batch_size - 1) // batch_size
-    st.info(f"🔄 Consultando {len(issn_list)} ISSN en {total_lotes} lotes...")
+    st.info(f" Consultando {len(issn_list)} ISSN en {total_lotes} lotes...")
 
     for i in range(0, len(issn_list), batch_size):
         lote = issn_list[i:i + batch_size]
@@ -158,12 +158,12 @@ def consultar_openalex_batch(issn_list, correo_openalex=None):
         
         try:
             r = requests.get(url, headers=headers, timeout=60)
-            st.write(f"🌐 Lote {i//batch_size + 1}: HTTP {r.status_code}")
+            st.write(f" Lote {i//batch_size + 1}: HTTP {r.status_code}")
             
             if r.status_code == 200:
                 data = r.json()
                 items = data.get("results", [])
-                st.write(f"✅ Obtenidos {len(items)} resultados en este lote")
+                st.write(f" Obtenidos {len(items)} resultados en este lote")
                 
                 for item in items:
                     resultados.append({
@@ -179,21 +179,21 @@ def consultar_openalex_batch(issn_list, correo_openalex=None):
                         "OpenAlex_ID": item.get("id", "")
                     })
             elif r.status_code == 403:
-                st.error("❌ OpenAlex devolvió 403: verifica tu correo institucional.")
+                st.error(" OpenAlex devolvió 403: verifica tu correo institucional.")
                 st.write(f"URL intentada: {url[:150]}...")
                 break
             elif r.status_code == 429:
-                st.warning("⚠️ Límite de tasa excedido. Esperando 5 segundos...")
+                st.warning(" Límite de tasa excedido. Esperando 5 segundos...")
                 time.sleep(5)
                 continue
             else:
-                st.warning(f"⚠️ Error {r.status_code} al consultar lote {i//batch_size + 1}")
+                st.warning(f" Error {r.status_code} al consultar lote {i//batch_size + 1}")
                 st.write(f"Respuesta: {r.text[:300]}")
                 
             time.sleep(1)  # Respetar límites de API
             
         except Exception as e:
-            st.error(f"❌ Error consultando OpenAlex: {e}")
+            st.error(f" Error consultando OpenAlex: {e}")
 
         progreso.progress(min((i + batch_size) / len(issn_list), 1.0))
 
@@ -202,9 +202,9 @@ def consultar_openalex_batch(issn_list, correo_openalex=None):
     duracion = time.time() - inicio
     
     if resultados:
-        st.success(f"✅ Consulta finalizada: {len(resultados)} resultados obtenidos en {duracion:.1f} s.")
+        st.success(f" Consulta finalizada: {len(resultados)} resultados obtenidos en {duracion:.1f} s.")
     else:
-        st.warning(f"⚠️ No se obtuvieron resultados desde OpenAlex (duración {duracion:.1f} s).")
+        st.warning(f" No se obtuvieron resultados desde OpenAlex (duración {duracion:.1f} s).")
 
     return pd.DataFrame(resultados)
 
@@ -293,13 +293,13 @@ if archivos:
                     issn_unicos.append(issn_fmt)
             
             if not issn_unicos:
-                st.warning("⚠️ No se encontraron ISSN válidos en la columna seleccionada.")
+                st.warning(" No se encontraron ISSN válidos en la columna seleccionada.")
             else:
-                st.info("🔄 Consultando OpenAlex, por favor espera...")
+                st.info(" Consultando OpenAlex, por favor espera...")
                 df_openalex = consultar_openalex_batch(issn_unicos, correo_openalex)
                 
                 if not df_openalex.empty:
-                    st.subheader("📊 Resultados de OpenAlex")
+                    st.subheader(" Resultados de OpenAlex")
                     st.dataframe(df_openalex)
                     
                     # Botón de descarga
@@ -308,7 +308,7 @@ if archivos:
                     output.seek(0)
                     
                     st.download_button(
-                        "📥 Descargar resultados OpenAlex",
+                        " Descargar resultados OpenAlex",
                         data=output,
                         file_name=f"OpenAlex_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -395,7 +395,7 @@ if archivos:
                 df_openalex = pd.DataFrame()
                 if usar_openalex:
                     st.divider()
-                    st.subheader("🔍 Consultando OpenAlex")
+                    st.subheader(" Consultando OpenAlex")
                     st.info("Extrayendo ISSN de las coincidencias...")
                     
                     issn_list = obtener_issn_de_dataframe(coincidencias_total)
@@ -404,14 +404,14 @@ if archivos:
                         df_openalex = consultar_openalex_batch(issn_list, correo_openalex)
                         
                         if not df_openalex.empty:
-                            st.subheader("📊 Resultados de OpenAlex")
+                            st.subheader(" Resultados de OpenAlex")
                             st.dataframe(df_openalex)
                     else:
                         st.warning("⚠️ No se encontraron ISSN válidos en las coincidencias.")
 
                 # === DESCARGA FINAL ===
                 st.divider()
-                st.subheader("📥 Descargar resultados")
+                st.subheader(" Descargar resultados")
                 
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
@@ -459,6 +459,6 @@ if archivos:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         else:
-            st.warning("⚠️ No se encontraron columnas comunes entre los archivos.")
+            st.warning(" No se encontraron columnas comunes entre los archivos.")
 else:
-    st.info("📂 Sube al menos un archivo Excel para comenzar.")
+    st.info(" Sube al menos un archivo Excel para comenzar.")
