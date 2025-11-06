@@ -230,7 +230,7 @@ def procesar_fechas(df):
         return df
 
     # Caso 2: si existen las tres columnas requeridas
-    if all(c in df.columns for c in ["Fecha Inicio", "Fecha Termino", "Retraso"]):
+    if all(c in df.columns for c in ["Fecha Inicio", "Fecha Termino", "Retraso"]): # Este all sirve para  iterar 
         import re
 
         def obtener_año(valor):
