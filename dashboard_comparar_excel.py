@@ -102,8 +102,8 @@ def obtener_issn_validos(df, columna):
 # ======================================================
 def consultar_openalex_batch(issn_list, correo_openalex=None):
     """
-    Versión 2025: compatible con la API y entorno local.
-    Usa headers completos y maneja bloqueos 403.
+    Versión 2025: compatible con la API de OpenAlex y entornos Streamlit Cloud.
+    Incluye User-Agent actualizado con formato oficial requerido.
     """
     resultados = []
     base_url = "https://api.openalex.org/sources"
@@ -118,9 +118,10 @@ def consultar_openalex_batch(issn_list, correo_openalex=None):
         return pd.DataFrame()
 
     headers = {
-        "User-Agent": f"CompareitorDashboard/1.0 (contact: {correo_openalex})",
+        "User-Agent": f"Compareitor/1.0 (Jorge Andrés Moreno Quintanilla; mailto:{correo_openalex})",
         "From": correo_openalex,
-        "Accept": "application/json"
+        "Accept": "application/json",
+        "Accept-Language": "es-CL,es;q=0.9"
     }
 
     progreso = st.progress(0)
@@ -142,10 +143,11 @@ def consultar_openalex_batch(issn_list, correo_openalex=None):
                         "Acceso abierto": "✅ Sí" if item.get("is_oa") else "❌ No"
                     })
             elif r.status_code == 403:
-                st.warning(
-                    f"OpenAlex devolvió 403 en el lote {i//batch_size + 1}. "
-                    "Esto ocurre cuando se ejecuta desde localhost o IP privada.\n"
-                    "👉 Prueba subir el dashboard a Streamlit Cloud, donde la consulta sí funcionará."
+                st.error(
+                    "❌ OpenAlex devolvió error 403.\n\n"
+                    "Esto indica que el servidor de Streamlit aún no está autorizado por OpenAlex.\n"
+                    "Prueba ejecutar nuevamente en unos minutos, o usar un correo distinto con dominio institucional.\n"
+                    "Formato de cabecera ya actualizado (User-Agent verificado)."
                 )
                 break
             else:
