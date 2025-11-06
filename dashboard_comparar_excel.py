@@ -386,9 +386,9 @@ if archivos:
 
                 # === COMPARACIÓN DE FECHAS ===
                 if comparar_fechas:
-                    st.info("🗓️ Procesando columnas de fechas en coincidencias...")
+                    st.info(" Procesando columnas de fechas en coincidencias...")
                     coincidencias_total = procesar_fechas(coincidencias_total)
-                    st.success("✅ Procesamiento de fechas completado.")
+                    st.success(" Procesamiento de fechas completado.")
                     st.dataframe(coincidencias_total.head(10))
 
                 # === CONSULTA OPENALEX (CORREGIDO) ===
@@ -407,7 +407,7 @@ if archivos:
                             st.subheader(" Resultados de OpenAlex")
                             st.dataframe(df_openalex)
                     else:
-                        st.warning("⚠️ No se encontraron ISSN válidos en las coincidencias.")
+                        st.warning(" No se encontraron ISSN válidos en las coincidencias.")
 
                 # === DESCARGA FINAL ===
                 st.divider()
@@ -453,7 +453,7 @@ if archivos:
                 output.seek(0)
 
                 st.download_button(
-                    "📥 Descargar archivo Excel con resultados",
+                    " Descargar archivo Excel con resultados",
                     data=output,
                     file_name=f"resultado_comparacion_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
