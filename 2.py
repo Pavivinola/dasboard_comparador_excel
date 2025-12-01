@@ -7,13 +7,177 @@ import time
 from datetime import datetime
 import plotly.express as px
 import re
-from io import BytesIO
+
+EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" # Esto permite 
+
+# ======================================================
+# FUNCIONES PARA EXCEL DESCARGABLE
+# ======================================================
+def sanitizar_nombre_hoja(nombre: str) -> str:
+    """Ajusta el nombre de la hoja para cumplir con las restricciones de Excel."""
+    if not isinstance(nombre, str):
+        nombre = str(nombre)
+
+    # Caracteres no permitidos en nombres de hoja de Excel
+    for ch in [":", "\\", "/", "?", "*", "[", "]"]:
+        nombre = nombre.replace(ch, " ")
+
+    nombre = nombre.strip()
+    if not nombre:
+        nombre = "Hoja"
+
+    # Límite de 31 caracteres
+    return nombre[:31]
+
+
+def crear_excel_descargable(hojas_dict: dict, incluir_graficos: bool = False) -> bytes:
+    """
+    Crea un archivo Excel (.xlsx) en memoria con múltiples hojas.
+    - hojas_dict: {nombre_logico_hoja: DataFrame}
+    - incluir_graficos: si True, agrega una hoja 'Graficos' basada en los datos disponibles.
+    """
+    output = io.BytesIO()
+    if not hojas_dict:
+        return output.getvalue()
+
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        workbook = writer.book
+        sheet_name_map = {}
+
+        # Orden de hojas cuando se pide el Excel "completo"
+        keys = list(hojas_dict.keys())
+        if incluir_graficos:
+            ordered = []
+
+            # 1) Resumen general (si existe)
+            if "Resumen_General" in hojas_dict:
+                ordered.append("Resumen_General")
+
+            # 2) Exclusivos (ordenados por nombre lógico)
+            exclusivos_keys = sorted(k for k in keys if k.startswith("Exclusivos_"))
+            ordered.extend(exclusivos_keys)
+
+            # 3) Coincidencias
+            if "Coincidencias" in hojas_dict and "Coincidencias" not in ordered:
+                ordered.append("Coincidencias")
+
+            # 4) Análisis temporal
+            if "Analisis_Referenciales" in hojas_dict:
+                ordered.append("Analisis_Referenciales")
+            if "Cobertura_Temporal" in hojas_dict:
+                ordered.append("Cobertura_Temporal")
+
+            # 5) OpenAlex
+            if "OpenAlex_Coincidencias" in hojas_dict:
+                ordered.append("OpenAlex_Coincidencias")
+
+            # 6) Cualquier otra hoja que quede fuera
+            for k in keys:
+                if k not in ordered:
+                    ordered.append(k)
+        else:
+            ordered = keys
+
+        # Escribir hojas de datos
+        for logical_name in ordered:
+            df = hojas_dict.get(logical_name)
+            if df is None or df.empty:
+                continue
+
+            sheet_name = sanitizar_nombre_hoja(logical_name)
+            sheet_name_map[logical_name] = sheet_name
+
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+            worksheet = writer.sheets[sheet_name]
+
+            # Auto-ancho de columnas
+            if not df.empty:
+                for idx, col in enumerate(df.columns):
+                    col_values = df[col].astype(str)
+                    max_len = max(col_values.map(len).max(), len(str(col))) + 2
+                    worksheet.set_column(idx, idx, max_len)
+
+                # Formato condicional simple para columnas numéricas
+                numeric_cols = df.select_dtypes(include=["number"]).columns
+                for col in numeric_cols:
+                    col_idx = df.columns.get_loc(col)
+                    # desde fila 1 (segunda fila, ya que la 0 es encabezado) hasta len(df)
+                    worksheet.conditional_format(
+                        1,
+                        col_idx,
+                        len(df),
+                        col_idx,
+                        {"type": "3_color_scale"},
+                    )
+
+        # Hoja de gráficos (solo para el Excel "completo")
+        if incluir_graficos and "Resumen_General" in hojas_dict:
+            graficos_sheet = workbook.add_worksheet(sanitizar_nombre_hoja("Graficos"))
+
+            # ----- Gráfico 1: Resumen general -----
+            df_res = hojas_dict["Resumen_General"]
+            if (
+                df_res is not None
+                and not df_res.empty
+                and "Métrica" in df_res.columns
+                and "Valor" in df_res.columns
+            ):
+                chart = workbook.add_chart({"type": "column"})
+                sheet_res_name = sheet_name_map.get("Resumen_General")
+                n_rows = len(df_res)
+
+                # Categorías = Métrica, Valores = Valor
+                chart.add_series(
+                    {
+                        "name": "Resumen general",
+                        "categories": [sheet_res_name, 1, 0, n_rows, 0],
+                        "values": [sheet_res_name, 1, 1, n_rows, 1],
+                    }
+                )
+                chart.set_title({"name": "Resumen general"})
+                chart.set_x_axis({"name": "Métrica"})
+                chart.set_y_axis({"name": "Valor"})
+
+                graficos_sheet.insert_chart(1, 1, chart)
+
+            # ----- Gráfico 2: Índice de cobertura (si existe) -----
+            if "Cobertura_Temporal" in hojas_dict:
+                df_cov = hojas_dict["Cobertura_Temporal"]
+                if (
+                    df_cov is not None
+                    and not df_cov.empty
+                    and "Archivo" in df_cov.columns
+                    and "Índice Cobertura" in df_cov.columns
+                ):
+                    chart2 = workbook.add_chart({"type": "column"})
+                    sheet_cov = sheet_name_map.get("Cobertura_Temporal")
+                    n2 = len(df_cov)
+                    idx_arch = df_cov.columns.get_loc("Archivo")
+                    idx_ind = df_cov.columns.get_loc("Índice Cobertura")
+
+                    chart2.add_series(
+                        {
+                            "name": "Índice de cobertura",
+                            "categories": [sheet_cov, 1, idx_arch, n2, idx_arch],
+                            "values": [sheet_cov, 1, idx_ind, n2, idx_ind],
+                        }
+                    )
+                    chart2.set_title({"name": "Índice de cobertura por archivo"})
+                    chart2.set_x_axis({"name": "Archivo"})
+                    chart2.set_y_axis({"name": "Índice"})
+
+                    graficos_sheet.insert_chart(16, 1, chart2)
+
+    output.seek(0)
+    return output.getvalue()
 
 # ======================================================
 # CONFIGURACIÓN DE LA PÁGINA
 # ======================================================
 st.set_page_config(page_title="Comparador de Excels", layout="wide")
 st.title("Compareitor")
+st.markdown("<h3 style='text-align: center;'>Fue desarrollado en la Biblioteca de la Universidad Alberto Hurtado 💙</h3>", unsafe_allow_html=True)
+st.divider()
 st.markdown("""
 Esta herramienta permite comparar varios archivos Excel (.xlsx o .xls),
 detectar coincidencias, encontrar registros exclusivos,
@@ -41,6 +205,9 @@ else:
 st.sidebar.markdown("---")
 
 # Opciones según el modo
+consultar_solo_uno = False
+analizar_tiempo_individual = False
+
 if modo == "Avanzado":
     st.sidebar.subheader("Análisis sobre coincidencias")
     comparar_fechas = st.sidebar.checkbox("Análisis temporal y referenciales", value=False)
@@ -56,14 +223,25 @@ if modo == "Avanzado":
     normalizar_datos = st.sidebar.checkbox("Normalizar ISSN/ISBN automáticamente", value=True)
     mostrar_metricas_detalladas = st.sidebar.checkbox("Mostrar métricas detalladas", value=True)
 else:
-    # Modo Rápido: valores predeterminados
+    # Modo Rápido: valores predeterminados (pero exponemos la casilla de análisis individual si el usuario la quiere)
     comparar_fechas = False
     usar_openalex = False
     consultar_solo_uno = False
-    analizar_tiempo_individual = False
     normalizar_datos = True
     mostrar_metricas_detalladas = False
     umbral_similitud = 100
+    # permitir que en modo Rápido el usuario active el análisis temporal por archivo
+    analizar_tiempo_individual = st.sidebar.checkbox(
+        "Análisis temporal y referencial para un archivo",
+        value=False
+    )
+
+# Casilla para limpiar duplicados en la hoja Coincidencias (disponible en todos los modos)
+limpiar_duplicados_final = st.sidebar.checkbox(
+    "Eliminar duplicados en 'Coincidencias' (por clave)",
+    value=False,
+    help="Quita filas duplicadas en la hoja Coincidencias usando la clave seleccionada (mantiene la primera aparición por archivo)."
+)
 
 correo_openalex = st.sidebar.text_input(
     "Correo para OpenAlex (recomendado)",
@@ -80,27 +258,6 @@ archivos = st.sidebar.file_uploader(
 # ======================================================
 # FUNCIONES AUXILIARES
 # ======================================================
-def crear_excel_descargable(dataframes_dict):
-    """
-    Crea un archivo Excel con múltiples hojas a partir de un diccionario de DataFrames.
-    
-    Args:
-        dataframes_dict: Diccionario con formato {nombre_hoja: dataframe}
-    
-    Returns:
-        BytesIO: Objeto en memoria con el archivo Excel
-    """
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        for nombre_hoja, df in dataframes_dict.items():
-            if df is not None and not df.empty:
-                # Limitar nombre de hoja a 31 caracteres (límite de Excel)
-                nombre_hoja_limpio = str(nombre_hoja)[:31]
-                df.to_excel(writer, sheet_name=nombre_hoja_limpio, index=False)
-    output.seek(0)
-    return output
-
-
 @st.cache_data
 def leer_excel(archivo):
     """Lee un archivo Excel (.xlsx o .xls) y elimina filas vacías."""
@@ -172,11 +329,11 @@ def consultar_openalex_batch(issn_list, correo_openalex=None):
     batch_size = 50
 
     if not issn_list:
-        st.warning("⚠ No se encontraron ISSN válidos para consultar en OpenAlex.")
+        st.warning(" No se encontraron ISSN válidos para consultar en OpenAlex.")
         return pd.DataFrame()
 
     if not correo_openalex or "@" not in correo_openalex:
-        st.error("⚠ Por favor ingresa un correo institucional válido para usar la API de OpenAlex.")
+        st.error(" Por favor ingresa un correo institucional válido para usar la API de OpenAlex.")
         return pd.DataFrame()
 
     headers = {"User-Agent": f"Compareitor/1.0 (mailto:{correo_openalex})"}
@@ -273,7 +430,7 @@ def tiene_fecha_valida(valor):
 # ======================================================
 # ANÁLISIS DE COINCIDENCIAS - FECHAS Y REFERENCIALES
 # ======================================================
-def analizar_fechas_coincidencias(coincidencias_df, modo_avanzado=False, resultados_dict=None):
+def analizar_fechas_coincidencias(coincidencias_df, modo_avanzado=False, resultados=None):
     """Analiza fechas y detecta referenciales EN LAS COINCIDENCIAS."""
     st.divider()
     st.subheader(" Análisis temporal y detección de registros referenciales")
@@ -286,7 +443,7 @@ def analizar_fechas_coincidencias(coincidencias_df, modo_avanzado=False, resulta
     if "Fecha Inicio" in coincidencias_df.columns:
         coincidencias_df["Es Referencial"] = ~coincidencias_df["Fecha Inicio"].apply(tiene_fecha_valida)
     else:
-        st.warning("⚠ No se encontró la columna 'Fecha Inicio'. No se puede detectar referenciales.")
+        st.warning(" No se encontró la columna 'Fecha Inicio'. No se puede detectar referenciales.")
         return coincidencias_df
     
     # ---- 1) Análisis de referenciales por archivo ----
@@ -304,10 +461,6 @@ def analizar_fechas_coincidencias(coincidencias_df, modo_avanzado=False, resulta
     df_referenciales["% Referenciales"] = (
         df_referenciales["Referenciales"] / df_referenciales["Total Coincidencias"] * 100
     ).round(1)
-    
-    # Guardar en resultados
-    if resultados_dict is not None:
-        resultados_dict["Análisis_Referenciales"] = df_referenciales
     
     col1, col2 = st.columns([2, 1])
     with col1:
@@ -345,7 +498,9 @@ def analizar_fechas_coincidencias(coincidencias_df, modo_avanzado=False, resulta
     coincidencias_temporales = coincidencias_df[coincidencias_df["Es Referencial"] == False].copy()
     
     if coincidencias_temporales.empty:
-        st.warning("⚠ No hay registros con Fecha Inicio válida para calcular cobertura.")
+        st.warning(" No hay registros con Fecha Inicio válida para calcular cobertura.")
+        if resultados is not None:
+            resultados["Analisis_Referenciales"] = df_referenciales
         return coincidencias_df
     
     st.markdown("###  Análisis de cobertura temporal")
@@ -387,10 +542,6 @@ def analizar_fechas_coincidencias(coincidencias_df, modo_avanzado=False, resulta
                 df_cobertura["Registros analizados"].rank(pct=True) * 0.4
             ).round(2)
             
-            # Guardar en resultados
-            if resultados_dict is not None:
-                resultados_dict["Cobertura_Temporal"] = df_cobertura
-            
             st.dataframe(df_cobertura.style.format({
                 "Promedio duración (años)": "{:.1f}",
                 "Min duración": "{:.1f}" if modo_avanzado else None,
@@ -408,6 +559,11 @@ def analizar_fechas_coincidencias(coincidencias_df, modo_avanzado=False, resulta
                 color_discrete_sequence=px.colors.qualitative.Bold
             )
             st.plotly_chart(fig_cobertura, use_container_width=True)
+
+            # Guardar en resultados completos
+            if resultados is not None:
+                resultados["Analisis_Referenciales"] = df_referenciales
+                resultados["Cobertura_Temporal"] = df_cobertura
     
     return coincidencias_df
 
@@ -415,34 +571,34 @@ def analizar_fechas_coincidencias(coincidencias_df, modo_avanzado=False, resulta
 # ======================================================
 # ANÁLISIS DE COINCIDENCIAS - OPENALEX
 # ======================================================
-def analizar_openalex_coincidencias(coincidencias_df, correo, modo_avanzado=False, resultados_dict=None):
+def analizar_openalex_coincidencias(coincidencias_df, correo, modo_avanzado=False, resultados=None):
     """Consulta OpenAlex SOLO para las coincidencias."""
     st.divider()
-    st.subheader("🔍 Consulta OpenAlex sobre coincidencias")
+    st.subheader(" Consulta OpenAlex sobre coincidencias")
     st.caption("Consultando información de las revistas/recursos encontrados en las coincidencias")
     
     # Extraer ISSN de las coincidencias
     issn_list = obtener_issn_de_dataframe(coincidencias_df)
     
     if not issn_list:
-        st.warning("⚠ No se encontraron ISSN válidos en las coincidencias para consultar OpenAlex.")
+        st.warning(" No se encontraron ISSN válidos en las coincidencias para consultar OpenAlex.")
         return
     
-    st.info(f" Se encontraron {len(issn_list)} ISSN únicos en las coincidencias")
+    st.info(f"📋 Se encontraron {len(issn_list)} ISSN únicos en las coincidencias")
     
     # Consultar OpenAlex
     df_openalex = consultar_openalex_batch(issn_list, correo)
     
     if df_openalex.empty:
-        st.warning("⚠ No se obtuvieron resultados de OpenAlex.")
+        st.warning(" No se obtuvieron resultados de OpenAlex.")
         return
     
-    # Guardar en resultados
-    if resultados_dict is not None:
-        resultados_dict["OpenAlex_Coincidencias"] = df_openalex
-    
+    # Guardar resultados en el diccionario global si corresponde
+    if resultados is not None:
+        resultados["OpenAlex_Coincidencias"] = df_openalex
+
     # Mostrar resultados
-    st.success(f"✅ Se obtuvieron {len(df_openalex)} resultados de OpenAlex")
+    st.success(f" Se obtuvieron {len(df_openalex)} resultados de OpenAlex")
     
     # Estadísticas rápidas
     col1, col2, col3 = st.columns(3)
@@ -502,20 +658,20 @@ def analizar_openalex_coincidencias(coincidencias_df, correo, modo_avanzado=Fals
         if len(df_openalex) > 20:
             st.info(f"Mostrando 20 de {len(df_openalex)} resultados. Descarga el Excel para ver todos.")
     
-    # Descargar resultados
-    excel_buffer = crear_excel_descargable({"Resultados_OpenAlex": df_openalex})
+    # Descargar resultados como XLSX
+    excel_oa = crear_excel_descargable({"OpenAlex_Coincidencias": df_openalex})
     st.download_button(
-        label=" Descargar resultados OpenAlex (Excel)",
-        data=excel_buffer,
+        label=" Descargar resultados OpenAlex (XLSX)",
+        data=excel_oa,
         file_name="openalex_coincidencias.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        mime=EXCEL_MIME
     )
 
 
 # ======================================================
 # ANÁLISIS ARCHIVO INDIVIDUAL - OPENALEX
 # ======================================================
-def analizar_openalex_individual(archivos, nombres, correo):
+def analizar_openalex_individual(archivos, nombres, correo, resultados=None):
     """Consulta OpenAlex para un archivo individual seleccionado."""
     st.divider()
     st.subheader(" Consulta OpenAlex - Archivo Individual")
@@ -530,88 +686,131 @@ def analizar_openalex_individual(archivos, nombres, correo):
     
     st.info(f" Archivo seleccionado: **{archivo_seleccionado}** ({len(df_seleccionado)} registros)")
     
-    if st.button("🔍 Consultar OpenAlex", type="primary"):
+    if st.button(" Consultar OpenAlex", type="primary"):
         issn_list = obtener_issn_de_dataframe(df_seleccionado)
         
         if not issn_list:
-            st.warning("⚠ No se encontraron ISSN válidos en este archivo.")
+            st.warning(" No se encontraron ISSN válidos en este archivo.")
             return
         
-        st.info(f"📋 Se encontraron {len(issn_list)} ISSN únicos")
+        st.info(f" Se encontraron {len(issn_list)} ISSN únicos")
         
         df_openalex = consultar_openalex_batch(issn_list, correo)
         
         if not df_openalex.empty:
             st.success(f"✅ Se obtuvieron {len(df_openalex)} resultados")
             st.dataframe(df_openalex, use_container_width=True)
+
+            # Guardar en resultados completos, si corresponde
+            if resultados is not None:
+                clave = f"OpenAlex_{os.path.splitext(archivo_seleccionado)[0]}"
+                resultados[clave] = df_openalex
             
-            excel_buffer = crear_excel_descargable({"Resultados_OpenAlex": df_openalex})
+            excel_oa = crear_excel_descargable(
+                {f"OpenAlex_{os.path.splitext(archivo_seleccionado)[0]}": df_openalex}
+            )
             st.download_button(
-                label=" Descargar resultados (Excel)",
-                data=excel_buffer,
-                file_name=f"openalex_{archivo_seleccionado}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                label=" Descargar resultados (XLSX)",
+                data=excel_oa,
+                file_name=f"openalex_{os.path.splitext(archivo_seleccionado)[0]}.xlsx",
+                mime=EXCEL_MIME
             )
 
 
 # ======================================================
 # ANÁLISIS ARCHIVO INDIVIDUAL - FECHAS
 # ======================================================
-def analizar_fechas_individual(archivos, nombres, resultados=None):
-    """Aplica el análisis temporal/referencial a un solo archivo."""
+def analizar_fechas_archivo_individual(archivos, nombres):
+    """Analiza fechas y referenciales para un archivo individual."""
     st.divider()
     st.subheader(" Análisis temporal y referenciales - Archivo individual")
-    
+
     archivo_seleccionado = st.selectbox(
         "Selecciona el archivo a analizar:",
         nombres,
-        key="sel_arch_tiempo"
+        key="select_archivo_fecha_individual"
     )
-    
+
     idx = nombres.index(archivo_seleccionado)
     df_sel = leer_excel(archivos[idx])
-    
-    st.info(f" Archivo analizado: **{archivo_seleccionado}** ({len(df_sel)} registros)")
-    
-    # Validar columnas necesarias
-    columnas_necesarias = ["Fecha Inicio", "Fecha Termino", "Retraso"]
-    columnas_faltantes = [col for col in columnas_necesarias if col not in df_sel.columns]
-    
-    if columnas_faltantes:
-        st.warning(f"⚠️ El archivo no tiene las columnas necesarias: {', '.join(columnas_faltantes)}")
-        st.info(" Las columnas deben llamarse exactamente: 'Fecha Inicio', 'Fecha Termino', 'Retraso'")
-        return
-    
-    # Añadimos una columna 'Archivo' para reutilizar la lógica existente
-    df_sel = df_sel.copy()
-    df_sel["Archivo"] = archivo_seleccionado
-    
-    # Crear diccionario temporal para no sobrescribir resultados de comparación múltiple
-    resultados_temporal = {}
-    
-    analizar_fechas_coincidencias(
-        df_sel,
-        modo_avanzado=True,
-        resultados_dict=resultados_temporal
-    )
-    
-    # Guardar con prefijo para diferenciarlo del análisis múltiple
-    if resultados is not None and resultados_temporal:
-        nombre_limpio = os.path.splitext(archivo_seleccionado)[0]
-        for key, value in resultados_temporal.items():
-            resultados[f"{key}_{nombre_limpio}"] = value
-    
-    # Botón de descarga individual
-    if resultados_temporal:
-        st.divider()
-        nombre_limpio = os.path.splitext(archivo_seleccionado)[0]
-        excel_individual = crear_excel_descargable(resultados_temporal)
-        st.download_button(
-            label=f" Descargar análisis temporal de {archivo_seleccionado}",
-            data=excel_individual,
-            file_name=f"analisis_temporal_{nombre_limpio}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+
+    st.info(f" Archivo seleccionado: **{archivo_seleccionado}** ({len(df_sel)} registros)")
+
+    if st.button(" Ejecutar análisis temporal para este archivo", type="primary"):
+        df_proc = procesar_fechas(df_sel.copy())
+
+        if "Fecha Inicio" not in df_proc.columns:
+            st.warning(" No se encontró la columna 'Fecha Inicio'. No se puede detectar referenciales en este archivo.")
+            st.dataframe(df_proc.head(20), use_container_width=True)
+            return
+
+        # Marcar referenciales
+        df_proc["Es Referencial"] = ~df_proc["Fecha Inicio"].apply(tiene_fecha_valida)
+
+        total_reg = len(df_proc)
+        total_ref = int(df_proc["Es Referencial"].sum())
+        con_fecha = total_reg - total_ref
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total registros", total_reg)
+        with col2:
+            pct_ref = (total_ref / total_reg * 100) if total_reg > 0 else 0.0
+            st.metric("Referenciales", f"{total_ref} ({pct_ref:.1f}%)")
+        with col3:
+            st.metric("Con fechas válidas", con_fecha)
+
+        st.markdown("###  Tabla de registros referenciales")
+        st.dataframe(df_proc[df_proc["Es Referencial"]].head(50), use_container_width=True)
+
+        # Cobertura temporal
+        registros_temporales = df_proc[df_proc["Es Referencial"] == False].copy()
+        if registros_temporales.empty:
+            st.warning(" No hay registros con Fecha Inicio válida para calcular cobertura temporal en este archivo.")
+            return
+
+        if "Rango Calculado" in registros_temporales.columns:
+            registros_temporales["Año Inicio"] = (
+                registros_temporales["Rango Calculado"]
+                .astype(str)
+                .str.extract(r"(\d{4})", expand=False)
+                .astype(float)
+            )
+            registros_temporales["Año Fin"] = (
+                registros_temporales["Rango Calculado"]
+                .astype(str)
+                .str.extract(r"-\s*(\d{4})", expand=False)
+                .astype(float)
+            )
+            registros_temporales["Duración (años)"] = (
+                registros_temporales["Año Fin"] - registros_temporales["Año Inicio"]
+            )
+
+            registros_temporales = registros_temporales.dropna(subset=["Año Inicio", "Año Fin"])
+
+            if not registros_temporales.empty:
+                duracion_prom = registros_temporales["Duración (años)"].mean()
+                duracion_min = registros_temporales["Duración (años)"].min()
+                duracion_max = registros_temporales["Duración (años)"].max()
+
+                st.markdown("###  Cobertura temporal del archivo")
+                st.write(
+                    f"Registros analizados: **{len(registros_temporales)}** | "
+                    f"Duración promedio: **{duracion_prom:.1f} años** "
+                    f"(mín: {duracion_min:.1f}, máx: {duracion_max:.1f})"
+                )
+
+                fig = px.histogram(
+                    registros_temporales,
+                    x="Año Inicio",
+                    nbins=20,
+                    title="Distribución de años de inicio de cobertura"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning(" No fue posible extraer años válidos desde 'Rango Calculado' en este archivo.")
+        else:
+            st.warning(" No se encontró la columna 'Rango Calculado'. Verifica que existan columnas de fechas compatibles.")
 
 
 # ======================================================
@@ -620,16 +819,17 @@ def analizar_fechas_individual(archivos, nombres, resultados=None):
 if archivos:
     dfs = [leer_excel(a) for a in archivos]
     nombres = [a.name for a in archivos]
-    
-    # Diccionario para almacenar todos los resultados del análisis
+
+    # Diccionario global para el análisis completo
     resultados_completos = {}
     
-    # ---- ANÁLISIS INDIVIDUAL (solo modo avanzado) ----
+    # ---- ANÁLISIS INDIVIDUAL (OpenAlex) ----
     if consultar_solo_uno and len(archivos) > 0:
-        analizar_openalex_individual(archivos, nombres, correo_openalex)
-    
+        analizar_openalex_individual(archivos, nombres, correo_openalex, resultados_completos)
+
+    # ---- ANÁLISIS INDIVIDUAL (Fechas) ----
     if analizar_tiempo_individual and len(archivos) > 0:
-        analizar_fechas_individual(archivos, nombres, resultados_completos)
+        analizar_fechas_archivo_individual(archivos, nombres)
     
     # ---- COMPARACIÓN MÚLTIPLE ----
     if len(archivos) > 1:
@@ -645,7 +845,7 @@ if archivos:
             resumen_archivos = pd.DataFrame({
                 "Archivo": nombres,
                 "Filas": [df.shape[0] for df in dfs],
-                "Columnas": [df.shape[1] for df in dfs],
+                "Columnas": [df.shape[1] for df in dfs]
             })
             st.dataframe(resumen_archivos, use_container_width=True)
         
@@ -693,17 +893,26 @@ if archivos:
                     exclusivos_por_archivo.append(temp_excl)
                 
                 coincidencias_total = pd.concat(coincidencias_por_archivo, ignore_index=True)
+
+                # Si el usuario pidió limpiar duplicados, deduplicar por (Archivo, __clave__)
+                if limpiar_duplicados_final and "__clave__" in coincidencias_total.columns:
+                    coincidencias_total = coincidencias_total.drop_duplicates(
+                        subset=["Archivo", "__clave__"],
+                        keep="first"
+                    )
+
+                # luego quitar la columna interna de clave
                 coincidencias_total = coincidencias_total.drop(columns=["__clave__"], errors="ignore")
                 
                 total_exclusivos = sum(len(df) for df in exclusivos_por_archivo)
                 total_registros = sum(len(df) for df in dfs)
-                
-                # Guardar coincidencias en resultados
+
+                # Guardar coincidencias en resultados completos
                 resultados_completos["Coincidencias"] = coincidencias_total
                 
                 # ---- RESUMEN GENERAL ----
                 st.divider()
-                st.subheader(" Resumen general")
+                st.subheader("Resumen general")
                 
                 if modo == "Avanzado" or mostrar_metricas_detalladas:
                     c1, c2, c3, c4 = st.columns(4)
@@ -716,7 +925,8 @@ if archivos:
                     c1.metric("Archivos cargados", len(archivos))
                     c2.metric("Coincidencias", len(coincidencias_total))
                     c3.metric("Exclusivos", total_exclusivos)
-                
+
+                # DataFrame de resumen para el Excel completo
                 df_resumen = pd.DataFrame(
                     [
                         {"Métrica": "Archivos cargados", "Valor": len(archivos)},
@@ -730,13 +940,13 @@ if archivos:
                 fig_general = px.pie(
                     pd.DataFrame({
                         "Tipo": ["Coincidencias", "Exclusivos"],
-                        "Cantidad": [len(coincidencias_total), total_exclusivos],
+                        "Cantidad": [len(coincidencias_total), total_exclusivos]
                     }),
                     names="Tipo",
                     values="Cantidad",
                     title="Distribución general de registros",
                     color="Tipo",
-                    color_discrete_map={"Coincidencias": "#2ECC71", "Exclusivos": "#3498DB"},
+                    color_discrete_map={"Coincidencias": "#2ECC71", "Exclusivos": "#3498DB"}
                 )
                 fig_general.update_traces(textinfo="percent+value")
                 st.plotly_chart(fig_general, use_container_width=True)
@@ -746,14 +956,16 @@ if archivos:
                     with st.expander(" Ver tabla de coincidencias completa"):
                         st.dataframe(coincidencias_total, use_container_width=True)
                         
+                        # Descargar coincidencias como XLSX
                         excel_coinc = crear_excel_descargable({"Coincidencias": coincidencias_total})
                         st.download_button(
-                            label=" Descargar coincidencias (Excel)",
+                            label=" Descargar coincidencias (XLSX)",
                             data=excel_coinc,
                             file_name="coincidencias.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            mime=EXCEL_MIME
                         )
                 else:
+                    # Modo rápido: solo primeras 10 filas
                     st.markdown("###  Muestra de coincidencias")
                     st.dataframe(coincidencias_total.head(10), use_container_width=True)
                     if len(coincidencias_total) > 10:
@@ -762,18 +974,19 @@ if archivos:
                 # ---- ANÁLISIS SOBRE COINCIDENCIAS ----
                 if comparar_fechas:
                     coincidencias_total = analizar_fechas_coincidencias(
-                        coincidencias_total,
+                        coincidencias_total, 
                         modo_avanzado=(modo == "Avanzado"),
-                        resultados_dict=resultados_completos,
+                        resultados=resultados_completos
                     )
+                    # Actualizar la versión almacenada
                     resultados_completos["Coincidencias"] = coincidencias_total
                 
                 if usar_openalex:
                     analizar_openalex_coincidencias(
-                        coincidencias_total,
+                        coincidencias_total, 
                         correo_openalex,
                         modo_avanzado=(modo == "Avanzado"),
-                        resultados_dict=resultados_completos,
+                        resultados=resultados_completos
                     )
                 
                 # ---- MOSTRAR EXCLUSIVOS (solo en modo avanzado) ----
@@ -784,41 +997,94 @@ if archivos:
                     
                     for i, (df_excl, nombre) in enumerate(zip(exclusivos_por_archivo, nombres)):
                         if not df_excl.empty:
+                            # Guardar en resultados completos
                             clave = f"Exclusivos_{os.path.splitext(nombre)[0]}"
                             resultados_completos[clave] = df_excl
-                            
+
                             with st.expander(f"**{nombre}** — {len(df_excl)} exclusivos"):
                                 st.dataframe(df_excl.head(20), use_container_width=True)
                                 
-                                excel_excl = crear_excel_descargable({clave: df_excl})
+                                excel_excl = crear_excel_descargable(
+                                    {clave: df_excl}
+                                )
                                 st.download_button(
-                                    label=f" Descargar exclusivos de {nombre}",
+                                    label=f" Descargar exclusivos de {nombre} (XLSX)",
                                     data=excel_excl,
                                     file_name=f"exclusivos_{os.path.splitext(nombre)[0]}.xlsx",
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    key=f"btn_excl_{i}",
+                                    mime=EXCEL_MIME,
+                                    key=f"btn_excl_{i}"
                                 )
-                
-                # ---- DESCARGA COMPLETA ----
+
+                # ---- BOTÓN DE DESCARGA COMPLETA ----
                 if resultados_completos:
                     st.divider()
                     st.subheader(" Descargar análisis completo")
                     st.caption("Descarga un único archivo Excel con todas las hojas de análisis disponibles.")
-                    excel_full = crear_excel_descargable(resultados_completos)
+                    excel_full = crear_excel_descargable(resultados_completos, incluir_graficos=True)
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     st.download_button(
                         label=" Descargar análisis completo (.xlsx)",
                         data=excel_full,
                         file_name=f"analisis_completo_{timestamp}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        type="primary",
+                        mime=EXCEL_MIME,
+                        type="primary"
                     )
+
         else:
             st.error("❌ No se encontraron columnas comunes entre los archivos.")
+    
     elif len(archivos) == 1:
         st.info("ℹ️ Sube al menos 2 archivos para realizar comparaciones.")
         if modo == "Avanzado":
-            st.info("Puedes usar las opciones de análisis individual en el panel lateral.")
-        st.dataframe(dfs[0].head(20), use_container_width=True)
+            st.info(" Puedes usar la opción de consulta individual de OpenAlex en el panel lateral.")
+        st.dataframe(dfs[0].head(20))
+
 else:
     st.info(" Sube al menos un archivo Excel en el panel lateral para comenzar.")
+    
+    # Mostrar guía según el modo
+    if modo == "Rápido":
+        st.markdown("""
+        ###  Modo Rápido - Guía de uso
+        
+        1. **Sube 2 o más archivos Excel** en el panel lateral
+        2. **Selecciona las columnas clave** para comparar (ej: ISSN, ISBN, Título)
+        3. **Resultados rápidos** con menos visualizaciones 
+        
+        **Pensado para:** Comparaciones rápidas y análisis básicos
+        """)
+    else:
+        st.markdown("""
+        ###  Modo Avanzado - Guía de uso
+        
+        1. **Sube 2 o más archivos Excel** en el panel lateral
+        2. **Selecciona las columnas clave para comparar** (ej: ISSN, ISBN, Título)
+        3. **Activa las opciones avanzadas** que necesites:
+           -  **Análisis temporal y referenciales**: Detecta recursos sin fechas y analiza cobertura
+           -  **OpenAlex en lote**: Consulta información de acceso abierto de revistas de las coincidencias
+           -  **OpenAlex individual**: Analiza un archivo específico
+           -  **Análisis temporal individual**: Analiza fechas y referenciales de un archivo específico
+        4. **Explora visualizaciones detalladas** y descarga todos los resultados en **Excel (.xlsx)**
+        
+        **Pensado para:** Análisis más completos y detallados.
+        
+        ---
+        
+        ####  Opciones disponibles:
+        -  Normalización de ISSN/ISBN
+        -  Estadísticas detalladas (min, max, promedios)
+        -  Visualizaciones adicionales (top 10, distribuciones por país)
+        -  Descarga de todos los resultados en Excel
+        -  Vista completa de exclusivos por archivo
+        """)
+    
+    # Tips generales
+    st.divider()
+    st.markdown("""
+    ###  Consejos para mejores resultados:
+    
+    - **Columnas clave**: Usa identificadores únicos como ISSN, ISBN, DOI,Título o Autor
+    - **Normalización**: Actívala para ignorar diferencias de formato en ISSN/ISBN
+    - **OpenAlex**: Requiere un correo institucional válido para mejores resultados
+    - **Fechas**: Las columnas deben llamarse exactamente "Fecha Inicio", "Fecha Termino" y "Retraso"
+    """)

@@ -175,7 +175,9 @@ def crear_excel_descargable(hojas_dict: dict, incluir_graficos: bool = False) ->
 # CONFIGURACIÓN DE LA PÁGINA
 # ======================================================
 st.set_page_config(page_title="Comparador de Excels", layout="wide")
-st.title("Compareitor")
+st.title("Compareitor: herramienta de comparación de archivos Excel")
+st.markdown("<h3 style='text-align: center;'>Desarrollado en la Biblioteca de la Universidad Alberto Hurtado </h3>", unsafe_allow_html=True)
+st.divider()
 st.markdown("""
 Esta herramienta permite comparar varios archivos Excel (.xlsx o .xls),
 detectar coincidencias, encontrar registros exclusivos,
@@ -203,6 +205,9 @@ else:
 st.sidebar.markdown("---")
 
 # Opciones según el modo
+consultar_solo_uno = False
+analizar_tiempo_individual = False
+
 if modo == "Avanzado":
     st.sidebar.subheader("Análisis sobre coincidencias")
     comparar_fechas = st.sidebar.checkbox("Análisis temporal y referenciales", value=False)
@@ -211,20 +216,32 @@ if modo == "Avanzado":
     st.sidebar.markdown("---")
     st.sidebar.subheader("Análisis archivo individual")
     consultar_solo_uno = st.sidebar.checkbox("Consultar OpenAlex para un archivo", value=False)
-    consultar_solo_uno = st.sidebar.checkbox("Análisis temporal y referencial para un archivo", value=False)
+    analizar_tiempo_individual = st.sidebar.checkbox("Análisis temporal y referencial para un archivo", value=False)
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("Opciones avanzadas")
     normalizar_datos = st.sidebar.checkbox("Normalizar ISSN/ISBN automáticamente", value=True)
     mostrar_metricas_detalladas = st.sidebar.checkbox("Mostrar métricas detalladas", value=True)
 else:
-    # Modo Rápido: valores predeterminados
+    # Modo Rápido: valores predeterminados (pero exponemos la casilla de análisis individual si el usuario la quiere)
     comparar_fechas = False
     usar_openalex = False
     consultar_solo_uno = False
     normalizar_datos = True
     mostrar_metricas_detalladas = False
     umbral_similitud = 100
+    # permitir que en modo Rápido el usuario active el análisis temporal por archivo
+    analizar_tiempo_individual = st.sidebar.checkbox(
+        "Análisis temporal y referencial para un archivo",
+        value=False
+    )
+
+# Casilla para limpiar duplicados en la hoja Coincidencias (disponible en todos los modos)
+limpiar_duplicados_final = st.sidebar.checkbox(
+    "Eliminar duplicados en 'Coincidencias' (por clave)",
+    value=False,
+    help="Quita filas duplicadas en la hoja Coincidencias usando la clave seleccionada (mantiene la primera aparición por archivo)."
+)
 
 correo_openalex = st.sidebar.text_input(
     "Correo para OpenAlex (recomendado)",
@@ -701,6 +718,102 @@ def analizar_openalex_individual(archivos, nombres, correo, resultados=None):
 
 
 # ======================================================
+# ANÁLISIS ARCHIVO INDIVIDUAL - FECHAS
+# ======================================================
+def analizar_fechas_archivo_individual(archivos, nombres):
+    """Analiza fechas y referenciales para un archivo individual."""
+    st.divider()
+    st.subheader(" Análisis temporal y referenciales - Archivo individual")
+
+    archivo_seleccionado = st.selectbox(
+        "Selecciona el archivo a analizar:",
+        nombres,
+        key="select_archivo_fecha_individual"
+    )
+
+    idx = nombres.index(archivo_seleccionado)
+    df_sel = leer_excel(archivos[idx])
+
+    st.info(f" Archivo seleccionado: **{archivo_seleccionado}** ({len(df_sel)} registros)")
+
+    if st.button(" Ejecutar análisis temporal para este archivo", type="primary"):
+        df_proc = procesar_fechas(df_sel.copy())
+
+        if "Fecha Inicio" not in df_proc.columns:
+            st.warning(" No se encontró la columna 'Fecha Inicio'. No se puede detectar referenciales en este archivo.")
+            st.dataframe(df_proc.head(20), use_container_width=True)
+            return
+
+        # Marcar referenciales
+        df_proc["Es Referencial"] = ~df_proc["Fecha Inicio"].apply(tiene_fecha_valida)
+
+        total_reg = len(df_proc)
+        total_ref = int(df_proc["Es Referencial"].sum())
+        con_fecha = total_reg - total_ref
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total registros", total_reg)
+        with col2:
+            pct_ref = (total_ref / total_reg * 100) if total_reg > 0 else 0.0
+            st.metric("Referenciales", f"{total_ref} ({pct_ref:.1f}%)")
+        with col3:
+            st.metric("Con fechas válidas", con_fecha)
+
+        st.markdown("###  Tabla de registros referenciales")
+        st.dataframe(df_proc[df_proc["Es Referencial"]].head(50), use_container_width=True)
+
+        # Cobertura temporal
+        registros_temporales = df_proc[df_proc["Es Referencial"] == False].copy()
+        if registros_temporales.empty:
+            st.warning(" No hay registros con Fecha Inicio válida para calcular cobertura temporal en este archivo.")
+            return
+
+        if "Rango Calculado" in registros_temporales.columns:
+            registros_temporales["Año Inicio"] = (
+                registros_temporales["Rango Calculado"]
+                .astype(str)
+                .str.extract(r"(\d{4})", expand=False)
+                .astype(float)
+            )
+            registros_temporales["Año Fin"] = (
+                registros_temporales["Rango Calculado"]
+                .astype(str)
+                .str.extract(r"-\s*(\d{4})", expand=False)
+                .astype(float)
+            )
+            registros_temporales["Duración (años)"] = (
+                registros_temporales["Año Fin"] - registros_temporales["Año Inicio"]
+            )
+
+            registros_temporales = registros_temporales.dropna(subset=["Año Inicio", "Año Fin"])
+
+            if not registros_temporales.empty:
+                duracion_prom = registros_temporales["Duración (años)"].mean()
+                duracion_min = registros_temporales["Duración (años)"].min()
+                duracion_max = registros_temporales["Duración (años)"].max()
+
+                st.markdown("###  Cobertura temporal del archivo")
+                st.write(
+                    f"Registros analizados: **{len(registros_temporales)}** | "
+                    f"Duración promedio: **{duracion_prom:.1f} años** "
+                    f"(mín: {duracion_min:.1f}, máx: {duracion_max:.1f})"
+                )
+
+                fig = px.histogram(
+                    registros_temporales,
+                    x="Año Inicio",
+                    nbins=20,
+                    title="Distribución de años de inicio de cobertura"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning(" No fue posible extraer años válidos desde 'Rango Calculado' en este archivo.")
+        else:
+            st.warning(" No se encontró la columna 'Rango Calculado'. Verifica que existan columnas de fechas compatibles.")
+
+
+# ======================================================
 # PROCESO PRINCIPAL
 # ======================================================
 if archivos:
@@ -710,9 +823,13 @@ if archivos:
     # Diccionario global para el análisis completo
     resultados_completos = {}
     
-    # ---- ANÁLISIS INDIVIDUAL (solo modo avanzado) ----
+    # ---- ANÁLISIS INDIVIDUAL (OpenAlex) ----
     if consultar_solo_uno and len(archivos) > 0:
         analizar_openalex_individual(archivos, nombres, correo_openalex, resultados_completos)
+
+    # ---- ANÁLISIS INDIVIDUAL (Fechas) ----
+    if analizar_tiempo_individual and len(archivos) > 0:
+        analizar_fechas_archivo_individual(archivos, nombres)
     
     # ---- COMPARACIÓN MÚLTIPLE ----
     if len(archivos) > 1:
@@ -776,7 +893,16 @@ if archivos:
                     exclusivos_por_archivo.append(temp_excl)
                 
                 coincidencias_total = pd.concat(coincidencias_por_archivo, ignore_index=True)
-                coincidencias_total = coincidencias_total.drop(columns=["__clave__"])
+
+                # Si el usuario pidió limpiar duplicados, deduplicar por (Archivo, __clave__)
+                if limpiar_duplicados_final and "__clave__" in coincidencias_total.columns:
+                    coincidencias_total = coincidencias_total.drop_duplicates(
+                        subset=["Archivo", "__clave__"],
+                        keep="first"
+                    )
+
+                # luego quitar la columna interna de clave
+                coincidencias_total = coincidencias_total.drop(columns=["__clave__"], errors="ignore")
                 
                 total_exclusivos = sum(len(df) for df in exclusivos_por_archivo)
                 total_registros = sum(len(df) for df in dfs)
@@ -937,6 +1063,7 @@ else:
            -  **Análisis temporal y referenciales**: Detecta recursos sin fechas y analiza cobertura
            -  **OpenAlex en lote**: Consulta información de acceso abierto de revistas de las coincidencias
            -  **OpenAlex individual**: Analiza un archivo específico
+           -  **Análisis temporal individual**: Analiza fechas y referenciales de un archivo específico
         4. **Explora visualizaciones detalladas** y descarga todos los resultados en **Excel (.xlsx)**
         
         **Pensado para:** Análisis más completos y detallados.
