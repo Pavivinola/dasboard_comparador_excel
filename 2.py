@@ -8,7 +8,7 @@ from datetime import datetime
 import plotly.express as px
 import re
 
-EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" # Esto permite 
+EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 # ======================================================
 # FUNCIONES PARA EXCEL DESCARGABLE
@@ -207,6 +207,7 @@ st.sidebar.markdown("---")
 # Opciones según el modo
 consultar_solo_uno = False
 analizar_tiempo_individual = False
+limpiar_duplicados_individual = False
 
 if modo == "Avanzado":
     st.sidebar.subheader("Análisis sobre coincidencias")
@@ -217,6 +218,11 @@ if modo == "Avanzado":
     st.sidebar.subheader("Análisis archivo individual")
     consultar_solo_uno = st.sidebar.checkbox("Consultar OpenAlex para un archivo", value=False)
     analizar_tiempo_individual = st.sidebar.checkbox("Análisis temporal y referencial para un archivo", value=False)
+    limpiar_duplicados_individual = st.sidebar.checkbox(
+        "Eliminar duplicados de un archivo",
+        value=False,
+        help="Permite generar una versión sin duplicados de un archivo seleccionado, usando las columnas clave que elijas."
+    )
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("Opciones avanzadas")
@@ -233,6 +239,10 @@ else:
     # permitir que en modo Rápido el usuario active el análisis temporal por archivo
     analizar_tiempo_individual = st.sidebar.checkbox(
         "Análisis temporal y referencial para un archivo",
+        value=False
+    )
+    limpiar_duplicados_individual = st.sidebar.checkbox(
+        "Eliminar duplicados de un archivo",
         value=False
     )
 
@@ -814,6 +824,65 @@ def analizar_fechas_archivo_individual(archivos, nombres):
 
 
 # ======================================================
+# ANÁLISIS ARCHIVO INDIVIDUAL - ELIMINAR DUPLICADOS
+# ======================================================
+def eliminar_duplicados_archivo_individual(archivos, nombres, columnas_sugeridas):
+    """Permite eliminar duplicados de un archivo individual según columnas seleccionadas."""
+    st.divider()
+    st.subheader(" Eliminar duplicados - Archivo individual")
+
+    archivo_seleccionado = st.selectbox(
+        "Selecciona el archivo a limpiar:",
+        nombres,
+        key="select_archivo_dup_individual"
+    )
+
+    idx = nombres.index(archivo_seleccionado)
+    df_sel = leer_excel(archivos[idx])
+
+    st.info(f" Archivo seleccionado: **{archivo_seleccionado}** ({len(df_sel)} registros)")
+
+    columnas_disponibles = df_sel.columns.tolist()
+
+    # Columnas sugeridas: intersección entre sugeridas y disponibles
+    columnas_por_defecto = [c for c in columnas_sugeridas if c in columnas_disponibles]
+    if not columnas_por_defecto:
+        columnas_por_defecto = columnas_disponibles  # fallback
+
+    columnas_clave = st.multiselect(
+        "Selecciona las columnas que se usarán para identificar duplicados",
+        options=columnas_disponibles,
+        default=columnas_por_defecto,
+        help="Las filas que tengan el mismo valor en TODAS estas columnas se considerarán duplicadas."
+    )
+
+    if columnas_clave and st.button("Eliminar duplicados de este archivo", type="primary"):
+        df_sin_duplicados = df_sel.drop_duplicates(subset=columnas_clave, keep="first")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Filas originales", len(df_sel))
+        with col2:
+            st.metric("Filas después de limpiar", len(df_sin_duplicados))
+
+        st.markdown("### Vista previa del archivo sin duplicados")
+        st.dataframe(df_sin_duplicados.head(50), use_container_width=True)
+
+        # Preparar Excel descargable
+        nombre_base = os.path.splitext(archivo_seleccionado)[0]
+        excel_sin_dup = crear_excel_descargable(
+            {f"{nombre_base}_sin_duplicados": df_sin_duplicados}
+        )
+        st.download_button(
+            label=" Descargar archivo sin duplicados (XLSX)",
+            data=excel_sin_dup,
+            file_name=f"{nombre_base}_sin_duplicados.xlsx",
+            mime=EXCEL_MIME,
+            key="btn_descargar_dup_individual"
+        )
+
+
+# ======================================================
 # PROCESO PRINCIPAL
 # ======================================================
 if archivos:
@@ -830,6 +899,16 @@ if archivos:
     # ---- ANÁLISIS INDIVIDUAL (Fechas) ----
     if analizar_tiempo_individual and len(archivos) > 0:
         analizar_fechas_archivo_individual(archivos, nombres)
+
+    # ---- ANÁLISIS INDIVIDUAL (Eliminar duplicados) ----
+    if limpiar_duplicados_individual and len(archivos) > 0:
+        # Si hay varios archivos, usamos columnas comunes como sugerencia;
+        # si hay solo uno, usamos todas sus columnas.
+        if len(dfs) > 1:
+            columnas_comunes = list(set.intersection(*(set(df.columns) for df in dfs)))
+        else:
+            columnas_comunes = dfs[0].columns.tolist()
+        eliminar_duplicados_archivo_individual(archivos, nombres, columnas_comunes)
     
     # ---- COMPARACIÓN MÚLTIPLE ----
     if len(archivos) > 1:
