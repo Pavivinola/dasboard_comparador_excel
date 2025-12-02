@@ -175,7 +175,7 @@ def crear_excel_descargable(hojas_dict: dict, incluir_graficos: bool = False) ->
 # CONFIGURACIÓN DE LA PÁGINA
 # ======================================================
 st.set_page_config(page_title="Comparador de Excels", layout="wide")
-st.title("BiblioMatch: Tu aliado inteligente para comparar bibliografía")
+st.title("BiblioMatch: Encuentra coincidencias, descubre diferencias.")
 st.markdown("<h3 style='text-align: center;'>Desarrollado en la Biblioteca de la Universidad Alberto Hurtado </h3>", unsafe_allow_html=True)
 st.divider()
 st.markdown("""
