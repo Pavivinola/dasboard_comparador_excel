@@ -244,7 +244,7 @@ limpiar_duplicados_final = st.sidebar.checkbox(
 )
 
 correo_openalex = st.sidebar.text_input(
-    "Correo para OpenAlex (recomendado)",
+    "Correo para OpenAlex",
     placeholder="tucorreo@institucion.cl",
     help="Necesario para usar la API de OpenAlex"
 )
